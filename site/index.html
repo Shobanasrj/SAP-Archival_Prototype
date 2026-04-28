@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SAP Archiving Assistant — Prototype Launcher</title>
+  <meta name="description" content="AI-powered Streamlit prototype that scans simulated SAP ECC tables for archiving candidates and produces cleanup recommendations." />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --primary: #0a6e8c;
+      --primary-dark: #063f51;
+      --accent: #1ba0bf;
+      --bg: #f4f7fa;
+      --surface: #ffffff;
+      --ink: #0e1c26;
+      --muted: #5c6f7a;
+      --border: #e1e8ee;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      color: var(--ink);
+      background: var(--bg);
+      line-height: 1.55;
+    }
+    .wrap { max-width: 1080px; margin: 0 auto; padding: 36px 28px 80px; }
+
+    .hero {
+      background: linear-gradient(120deg, var(--primary-dark) 0%, var(--primary) 60%, var(--accent) 100%);
+      color: #fff;
+      border-radius: 16px;
+      padding: 40px 36px;
+      box-shadow: 0 12px 32px rgba(6,63,81,0.16);
+      margin-bottom: 28px;
+    }
+    .eyebrow {
+      font-size: 12px; text-transform: uppercase; letter-spacing: 0.14em;
+      opacity: 0.85; font-weight: 600;
+    }
+    .hero h1 {
+      margin: 8px 0 10px 0;
+      font-size: 40px; font-weight: 700; letter-spacing: -0.015em;
+    }
+    .hero p { margin: 0; max-width: 720px; opacity: 0.94; font-size: 16px; }
+    .pills { margin-top: 18px; display: flex; gap: 8px; flex-wrap: wrap; }
+    .pill {
+      background: rgba(255,255,255,0.16);
+      padding: 4px 12px; border-radius: 999px; font-size: 12px; font-weight: 500;
+    }
+    .cta-row { margin-top: 22px; display: flex; gap: 12px; flex-wrap: wrap; }
+    .btn {
+      display: inline-block; padding: 11px 18px; border-radius: 10px;
+      font-weight: 600; text-decoration: none; font-size: 14px;
+      transition: transform .08s ease, background .15s ease;
+    }
+    .btn-primary {
+      background: #fff; color: var(--primary-dark);
+    }
+    .btn-primary:hover { background: #f0f6f9; transform: translateY(-1px); }
+    .btn-ghost {
+      background: rgba(255,255,255,0.12); color: #fff;
+      border: 1px solid rgba(255,255,255,0.4);
+    }
+    .btn-ghost:hover { background: rgba(255,255,255,0.2); }
+
+    .grid {
+      display: grid; gap: 16px; grid-template-columns: repeat(3, minmax(0,1fr));
+      margin-bottom: 24px;
+    }
+    @media (max-width: 800px) { .grid { grid-template-columns: 1fr; } }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 22px 22px;
+    }
+    .card h3 {
+      margin: 0 0 8px 0; font-size: 15px; font-weight: 600;
+      color: var(--primary-dark); letter-spacing: 0.01em;
+    }
+    .card p { margin: 0; color: var(--muted); font-size: 14px; }
+
+    .section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 28px 28px;
+      margin-bottom: 18px;
+    }
+    .section h2 {
+      margin: 0 0 14px 0; font-size: 20px; font-weight: 700;
+      color: var(--ink);
+    }
+    .section p { margin: 0 0 12px 0; color: var(--ink); font-size: 14px; }
+    .section ul { margin: 6px 0 0 0; padding-left: 20px; }
+    .section li { margin: 4px 0; color: var(--ink); font-size: 14px; }
+    code, .mono {
+      font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 13px;
+    }
+    pre {
+      background: #0e1c26; color: #e8f1f5;
+      padding: 14px 18px; border-radius: 10px; overflow-x: auto;
+      font-size: 13px; line-height: 1.5;
+    }
+    .footer {
+      color: var(--muted); font-size: 12px; text-align: center;
+      padding-top: 18px; border-top: 1px solid var(--border); margin-top: 24px;
+    }
+    a { color: var(--primary); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+
+    <header class="hero">
+      <div class="eyebrow">Prototype · Synthetic data only</div>
+      <h1>SAP Archiving Assistant</h1>
+      <p>AI-assisted archivability analysis across simulated SAP ECC business
+         objects. Identify cleanup candidates, surface data-quality risk, and
+         prioritize archive runs — with a transparent rules engine plus
+         lightweight ML anomaly detection.</p>
+      <div class="pills">
+        <span class="pill">Streamlit</span>
+        <span class="pill">pandas · numpy</span>
+        <span class="pill">IsolationForest (graceful fallback)</span>
+        <span class="pill">Plotly (graceful fallback)</span>
+      </div>
+      <div class="cta-row">
+        <a class="btn btn-primary" href="http://localhost:8501" id="launch-link">Launch Streamlit app →</a>
+        <a class="btn btn-ghost" href="../README.md">Read the README</a>
+      </div>
+    </header>
+
+    <section class="grid">
+      <div class="card">
+        <h3>Scan</h3>
+        <p>Simulates table-level scans of FI, MM, SD, CO, PP, and BC archiving
+           objects to detect duplicates, inconsistencies, and incomplete
+           workflows.</p>
+      </div>
+      <div class="card">
+        <h3>Score</h3>
+        <p>Weighted rules engine combines residence time, status, workflow
+           completion, activity recency, legal hold, dependencies, and data
+           quality into a 0–100 archivability score.</p>
+      </div>
+      <div class="card">
+        <h3>Recommend</h3>
+        <p>Each record is bucketed into Archive, Review, Remediate, Deduplicate,
+           or Retain, with a priority score and downloadable executive report.</p>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>Run locally on port 8501</h2>
+      <p>From the project root:</p>
+<pre><code>cd sap-archiving-assistant
+pip install -r requirements.txt
+streamlit run app.py --server.port 8501 --server.address 0.0.0.0</code></pre>
+      <p>Then open <a href="http://localhost:8501">http://localhost:8501</a> —
+         this launcher's <b>Launch Streamlit app</b> button points to the same URL.</p>
+    </section>
+
+    <section class="section">
+      <h2>What the app shows</h2>
+      <ul>
+        <li>Executive summary with reclaimable-storage estimate</li>
+        <li>KPI cards: records in scope, archive candidates, review/remediation, data-quality findings</li>
+        <li>Charts: stacked archivability by object, recommendation mix, age vs archivability scatter, recoverable storage by object</li>
+        <li>Per-object inventory and priority worklist (top 50)</li>
+        <li>Object drilldown with rule-by-rule pass/fail breakdown</li>
+        <li>CSV exports (filtered + archive-only) and Markdown executive report</li>
+      </ul>
+    </section>
+
+    <section class="section">
+      <h2>Resilience &amp; portability</h2>
+      <ul>
+        <li><b>scikit-learn optional:</b> uses <code>IsolationForest</code> when present, otherwise a deterministic z-score heuristic.</li>
+        <li><b>Plotly optional:</b> falls back to Streamlit's native chart primitives.</li>
+        <li><b>No SAP credentials</b> or external services required — entirely self-contained.</li>
+      </ul>
+    </section>
+
+    <div class="footer">
+      Prototype • All data synthetic • Not a substitute for SARA / ILM workflows.
+    </div>
+  </div>
+</body>
+</html>
