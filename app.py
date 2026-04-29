@@ -1,11 +1,13 @@
 """
 SAP Archiving Assistant — Streamlit prototype.
 
-An AI-powered, enterprise-styled dashboard that scans simulated SAP ECC tables
-for archiving candidates, applies a transparent rules engine plus optional
-ML-based anomaly detection, and produces actionable cleanup recommendations.
+Client-demo app for SAP ECC/S/4 archiving assessment:
+- scans synthetic SAP objects for data-quality, workflow, dependency, and residence-time risks
+- scores archivability with transparent rules plus optional IsolationForest anomaly detection
+- plans cleanup backlog and archive run packages
+- supports what-if policy tuning and downloadable client-ready outputs
 
-Run: `streamlit run app.py --server.port 8501`
+Run: python -m streamlit run app.py
 All data is synthetic. No SAP connection is required.
 """
 from __future__ import annotations
@@ -18,6 +20,8 @@ import pandas as pd
 import streamlit as st
 
 from archivability import (
+    RULES,
+    RULE_WEIGHTS,
     SKLEARN_AVAILABLE,
     detect_data_issues,
     run_full_pipeline,
@@ -30,11 +34,10 @@ try:
     import plotly.graph_objects as go
 
     PLOTLY_AVAILABLE = True
-except Exception:  # pragma: no cover
+except Exception:
     PLOTLY_AVAILABLE = False
 
 
-# ---------- Page config ----------
 st.set_page_config(
     page_title="SAP Archiving Assistant",
     page_icon="🗄️",
@@ -43,8 +46,7 @@ st.set_page_config(
 )
 
 
-# ---------- Theme / CSS ----------
-PRIMARY = "#0a6e8c"      # SAP-adjacent teal
+PRIMARY = "#0a6e8c"
 PRIMARY_DARK = "#063f51"
 ACCENT = "#1ba0bf"
 SURFACE = "#ffffff"
@@ -62,162 +64,416 @@ STATUS_COLORS = {
 
 CUSTOM_CSS = f"""
 <style>
-  /* Fonts */
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono&display=swap');
 
   html, body, [class*="css"], [data-testid="stAppViewContainer"] {{
     font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
     color: {INK};
   }}
-  [data-testid="stAppViewContainer"] {{
-    background: {BG};
-  }}
+  [data-testid="stAppViewContainer"] {{ background: {BG}; }}
   [data-testid="stHeader"] {{ background: transparent; }}
   [data-testid="stSidebar"] {{
     background: linear-gradient(180deg, {PRIMARY_DARK} 0%, #04303f 100%);
   }}
   [data-testid="stSidebar"] * {{ color: #e8f1f5 !important; }}
-  [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2,
-  [data-testid="stSidebar"] h3 {{ color: #ffffff !important; letter-spacing: 0.02em; }}
-
-  /* App brand bar */
+  [data-testid="stSidebar"] input, [data-testid="stSidebar"] textarea {{
+    color: {INK} !important;
+  }}
+  [data-testid="stSidebar"] [role="option"], [data-testid="stSidebar"] [data-baseweb="select"] * {{
+    color: {INK} !important;
+  }}
   .brand-bar {{
-    background: linear-gradient(90deg, {PRIMARY_DARK} 0%, {PRIMARY} 65%, {ACCENT} 100%);
+    background: linear-gradient(90deg, {PRIMARY_DARK} 0%, {PRIMARY} 64%, {ACCENT} 100%);
     color: #fff;
     padding: 22px 28px;
-    border-radius: 12px;
-    margin-bottom: 22px;
-    box-shadow: 0 4px 14px rgba(6,63,81,0.10);
+    border-radius: 14px;
+    margin-bottom: 14px;
+    box-shadow: 0 8px 24px rgba(6,63,81,0.12);
   }}
-  .brand-bar h1 {{ margin: 0; font-size: 26px; font-weight: 700; letter-spacing: -0.01em; }}
-  .brand-bar p {{ margin: 4px 0 0 0; opacity: 0.92; font-size: 14px; }}
-  .brand-bar .badges {{ margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; }}
-  .brand-bar .pill {{
+  .brand-bar h1 {{
+    margin: 0;
+    font-size: 28px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+  }}
+  .brand-bar p {{
+    margin: 6px 0 0 0;
+    opacity: 0.94;
+    font-size: 14px;
+    max-width: 980px;
+    line-height: 1.55;
+  }}
+  .badges {{
+    margin-top: 12px;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }}
+  .pill {{
+    display: inline-block;
     background: rgba(255,255,255,0.16);
-    padding: 3px 10px;
+    border: 1px solid rgba(255,255,255,0.18);
+    padding: 4px 10px;
     border-radius: 999px;
     font-size: 12px;
-    font-weight: 500;
+    font-weight: 700;
   }}
-
-  /* KPI cards */
-  .kpi-grid {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }}
-  @media (max-width: 1100px) {{ .kpi-grid {{ grid-template-columns: repeat(2, 1fr); }} }}
-  .kpi {{
-    background: {SURFACE};
-    border: 1px solid #e1e8ee;
-    border-radius: 12px;
-    padding: 16px 18px;
-    box-shadow: 0 1px 2px rgba(14,28,38,0.04);
-  }}
-  .kpi .label {{
-    color: {MUTED}; font-size: 12px; text-transform: uppercase;
-    letter-spacing: 0.08em; font-weight: 600;
-  }}
-  .kpi .value {{
-    color: {INK}; font-size: 28px; font-weight: 700; margin-top: 4px;
-    font-variant-numeric: tabular-nums;
-  }}
-  .kpi .delta {{ color: {MUTED}; font-size: 12px; margin-top: 4px; }}
-  .kpi.accent {{ border-left: 4px solid {PRIMARY}; }}
-  .kpi.warn {{ border-left: 4px solid #c97a17; }}
-  .kpi.danger {{ border-left: 4px solid #a83232; }}
-  .kpi.good {{ border-left: 4px solid #2f8a3e; }}
-
-  /* Section card */
   .section {{
     background: {SURFACE};
     border: 1px solid #e1e8ee;
-    border-radius: 12px;
-    padding: 20px 22px;
-    margin-bottom: 18px;
+    border-radius: 14px;
+    padding: 18px 20px;
+    margin-bottom: 16px;
+    box-shadow: 0 1px 2px rgba(14,28,38,0.035);
   }}
   .section h2 {{
-    font-size: 16px; font-weight: 600; margin: 0 0 14px 0;
-    color: {INK}; letter-spacing: -0.005em;
+    font-size: 17px;
+    font-weight: 750;
+    margin: 0 0 12px 0;
+    letter-spacing: -0.01em;
   }}
-  .section h2 .hint {{
-    font-weight: 400; color: {MUTED}; font-size: 13px; margin-left: 8px;
+  .hint {{
+    color: {MUTED};
+    font-size: 13px;
+    font-weight: 450;
   }}
-
-  /* Status badges */
+  .kpi-grid {{
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 12px;
+  }}
+  @media (max-width: 1280px) {{
+    .kpi-grid {{ grid-template-columns: repeat(3, 1fr); }}
+  }}
+  @media (max-width: 820px) {{
+    .kpi-grid {{ grid-template-columns: repeat(1, 1fr); }}
+  }}
+  .kpi {{
+    background: {SURFACE};
+    border: 1px solid #e1e8ee;
+    border-radius: 14px;
+    padding: 15px 16px;
+    min-height: 110px;
+    box-shadow: 0 1px 2px rgba(14,28,38,0.04);
+  }}
+  .kpi .label {{
+    color: {MUTED};
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 800;
+  }}
+  .kpi .value {{
+    color: {INK};
+    font-size: 28px;
+    font-weight: 800;
+    margin-top: 6px;
+    font-variant-numeric: tabular-nums;
+  }}
+  .kpi .delta {{ color: {MUTED}; font-size: 12px; margin-top: 4px; line-height: 1.35; }}
+  .accent {{ border-left: 4px solid {PRIMARY}; }}
+  .good {{ border-left: 4px solid #2f8a3e; }}
+  .warn {{ border-left: 4px solid #c97a17; }}
+  .danger {{ border-left: 4px solid #a83232; }}
+  .purple {{ border-left: 4px solid #7a3aa8; }}
   .badge {{
-    display: inline-block; padding: 2px 8px; border-radius: 999px;
-    font-size: 11px; font-weight: 600; letter-spacing: 0.03em;
+    display: inline-block;
+    padding: 3px 9px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 750;
+    letter-spacing: 0.03em;
   }}
-
-  /* Buttons */
+  .playbook {{
+    border: 1px solid #e1e8ee;
+    border-radius: 12px;
+    padding: 12px 14px;
+    background: #f8fbfc;
+    margin-bottom: 10px;
+  }}
   .stButton > button, .stDownloadButton > button {{
-    background: {PRIMARY}; color: #fff; border: 0; border-radius: 8px;
-    padding: 8px 16px; font-weight: 600;
+    background: {PRIMARY};
+    color: #fff;
+    border: 0;
+    border-radius: 8px;
+    padding: 8px 16px;
+    font-weight: 700;
   }}
   .stButton > button:hover, .stDownloadButton > button:hover {{
     background: {PRIMARY_DARK};
   }}
-
-  /* Tables */
-  [data-testid="stDataFrame"] {{ border-radius: 8px; overflow: hidden; }}
-
-  /* Footer */
+  [data-testid="stDataFrame"] {{ border-radius: 10px; overflow: hidden; }}
   .footer {{
-    color: {MUTED}; font-size: 12px; text-align: center; padding: 14px 0 4px;
+    color: {MUTED};
+    font-size: 12px;
+    text-align: center;
+    padding: 16px 0 4px;
   }}
-  .footer a {{ color: {PRIMARY}; }}
 </style>
 """
-
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 
-# ---------- Data load (cached) ----------
 @st.cache_data(show_spinner=False)
 def load_data(seed: int, n_per_object: int) -> pd.DataFrame:
     df = generate_objects(seed=seed, n_per_object=n_per_object)
     return run_full_pipeline(df)
 
 
-# ---------- Sidebar ----------
+def gb(series: pd.Series) -> float:
+    return round(float(series.sum()) / 1024, 2)
+
+
+def pct(part: int | float, total: int | float) -> float:
+    return round(100.0 * float(part) / max(float(total), 1.0), 1)
+
+
+def fig_layout(fig, height: int = 340):
+    fig.update_layout(
+        margin=dict(l=10, r=10, t=10, b=10),
+        height=height,
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        font=dict(family="Inter", size=12, color=INK),
+        legend_title_text="",
+    )
+    return fig
+
+
+def render_kpis(cards: list[dict]):
+    html = ['<div class="kpi-grid">']
+    for c in cards:
+        html.append(
+            f"""
+            <div class="kpi {c.get('style', 'accent')}">
+              <div class="label">{c['label']}</div>
+              <div class="value">{c['value']}</div>
+              <div class="delta">{c['delta']}</div>
+            </div>
+            """
+        )
+    html.append("</div><div style='height:14px'></div>")
+    st.markdown("".join(html), unsafe_allow_html=True)
+
+
+def recommendation_counts(frame: pd.DataFrame) -> pd.DataFrame:
+    order = ["ARCHIVE", "REVIEW", "REMEDIATE", "DEDUPLICATE", "RETAIN"]
+    counts = frame["recommendation"].value_counts().reindex(order, fill_value=0)
+    return counts.rename_axis("recommendation").reset_index(name="count")
+
+
+def build_cleanup_backlog(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty:
+        return pd.DataFrame()
+    backlog = frame[
+        (frame["recommendation"].isin(["REMEDIATE", "DEDUPLICATE", "REVIEW"]))
+        | frame["duplicate_flag"]
+        | frame["inconsistency_flag"]
+        | (frame["workflow_completion"] < 0.95)
+        | frame["has_open_dependencies"]
+        | frame["legal_hold"]
+    ].copy()
+
+    conditions = [
+        backlog["legal_hold"],
+        backlog["duplicate_flag"],
+        backlog["inconsistency_flag"] | (backlog["data_quality_score"] < 0.7),
+        backlog["has_open_dependencies"],
+        backlog["workflow_completion"] < 0.95,
+    ]
+    backlog["issue_type"] = np.select(
+        conditions,
+        ["Legal hold", "Duplicate", "Data inconsistency", "Open dependency", "Incomplete workflow"],
+        default="Manual review",
+    )
+    backlog["suggested_action"] = np.select(
+        conditions,
+        [
+            "Confirm retention/legal hold owner before excluding from archive package",
+            "Run duplicate-key consolidation and retain golden document",
+            "Correct status/reference mismatch, then re-run archivability rules",
+            "Resolve downstream document flow or open settlement dependencies",
+            "Close or cancel workflow items with business owner approval",
+        ],
+        default="Route to business owner for disposition decision",
+    )
+    backlog["owner_group"] = np.select(
+        conditions,
+        ["Legal/Compliance", "Data Steward", "Data Steward", "Functional Owner", "Workflow Owner"],
+        default="Business Owner",
+    )
+    backlog["effort"] = np.select(
+        [
+            backlog["issue_type"].isin(["Legal hold", "Open dependency"]),
+            backlog["issue_type"].isin(["Data inconsistency", "Duplicate"]),
+        ],
+        ["High", "Medium"],
+        default="Low",
+    )
+    backlog["target_sla_days"] = np.select(
+        [
+            backlog["effort"].eq("High"),
+            backlog["effort"].eq("Medium"),
+        ],
+        [20, 10],
+        default=5,
+    )
+    return backlog.sort_values(["priority_score", "size_mb"], ascending=False)
+
+
+def build_archive_packages(frame: pd.DataFrame, max_package_gb: float, max_records: int) -> tuple[pd.DataFrame, pd.DataFrame]:
+    candidates = frame[frame["recommendation"] == "ARCHIVE"].copy()
+    if candidates.empty:
+        return pd.DataFrame(), candidates
+
+    candidates = candidates.sort_values(
+        ["archiving_object", "priority_score", "size_mb"],
+        ascending=[True, False, False],
+    ).copy()
+    package_ids = []
+    current_object = None
+    wave = 1
+    package_gb = 0.0
+    package_records = 0
+
+    for _, row in candidates.iterrows():
+        row_gb = float(row["size_mb"]) / 1024
+        if row["archiving_object"] != current_object:
+            current_object = row["archiving_object"]
+            wave = 1
+            package_gb = 0.0
+            package_records = 0
+        elif package_gb + row_gb > max_package_gb or package_records >= max_records:
+            wave += 1
+            package_gb = 0.0
+            package_records = 0
+
+        package_ids.append(f"{row['archiving_object']}-W{wave:02d}")
+        package_gb += row_gb
+        package_records += 1
+
+    candidates["archive_package"] = package_ids
+    summary = (
+        candidates.groupby(["archive_package", "archiving_object", "module"], as_index=False)
+        .agg(
+            records=("object_id", "count"),
+            size_mb=("size_mb", "sum"),
+            avg_score=("archivability_score", "mean"),
+            max_priority=("priority_score", "max"),
+            oldest_days=("age_days", "max"),
+        )
+        .sort_values(["archiving_object", "archive_package"])
+    )
+    summary["size_gb"] = (summary["size_mb"] / 1024).round(2)
+    summary["avg_score"] = summary["avg_score"].round(1)
+    summary["estimated_runtime_min"] = (summary["records"] * 0.018 + summary["size_gb"] * 5).round(0).astype(int).clip(lower=5)
+    summary["sequence"] = range(1, len(summary) + 1)
+    return summary, candidates
+
+
+def build_scenario(frame: pd.DataFrame, residence_buffer: int, workflow_threshold: float, dq_threshold: float, idle_months: int) -> pd.DataFrame:
+    if frame.empty:
+        return frame.copy()
+    scenario = frame.copy()
+    residence_ok = scenario["residence_months"] >= (scenario["min_residence_months"] + residence_buffer)
+    status_ok = scenario["status"].isin(["COMPLETED", "ARCHIVED_CANDIDATE"])
+    workflow_ok = scenario["workflow_completion"] >= workflow_threshold
+    idle_ok = scenario["days_since_activity"] >= idle_months * 30
+    hold_ok = ~scenario["legal_hold"]
+    deps_ok = ~scenario["has_open_dependencies"]
+    dq_ok = scenario["data_quality_score"] >= dq_threshold
+
+    score = (
+        residence_ok.astype(float) * RULE_WEIGHTS["residence_met"]
+        + status_ok.astype(float) * RULE_WEIGHTS["status_terminal"]
+        + workflow_ok.astype(float) * RULE_WEIGHTS["workflow_complete"]
+        + idle_ok.astype(float) * RULE_WEIGHTS["no_recent_activity"]
+        + hold_ok.astype(float) * RULE_WEIGHTS["no_legal_hold"]
+        + deps_ok.astype(float) * RULE_WEIGHTS["no_open_dependencies"]
+        + dq_ok.astype(float) * RULE_WEIGHTS["data_quality_ok"]
+    )
+    scenario["scenario_score"] = score.round(1)
+    scenario["scenario_archive_ready"] = (
+        (scenario["scenario_score"] >= 80)
+        & residence_ok
+        & status_ok
+        & workflow_ok
+        & idle_ok
+        & hold_ok
+        & deps_ok
+        & dq_ok
+        & ~scenario["duplicate_flag"]
+        & ~scenario["inconsistency_flag"]
+    )
+    return scenario
+
+
+def client_report(frame: pd.DataFrame, packages: pd.DataFrame, backlog: pd.DataFrame, issues: dict, summary: pd.DataFrame) -> str:
+    base = build_markdown_report(frame, issues, summary)
+    archive_n = int((frame["recommendation"] == "ARCHIVE").sum())
+    cleanup_n = len(backlog)
+    package_n = len(packages)
+    lines = [
+        base,
+        "",
+        "## Client implementation plan",
+        "",
+        f"- Recommended archive packages: **{package_n:,}**",
+        f"- Archive candidates to include in pilot: **{archive_n:,}**",
+        f"- Cleanup backlog items before broad archive run: **{cleanup_n:,}**",
+        "",
+        "### Proposed phases",
+        "",
+        "1. **Validate rules:** confirm residence/retention policy by object with business, legal, and compliance owners.",
+        "2. **Clean blockers:** remediate duplicate, workflow, dependency, legal-hold, and status inconsistency items.",
+        "3. **Pilot archive package:** run the highest-score, lowest-risk package first and verify retrieval/read-only access.",
+        "4. **Scale waves:** schedule remaining packages by object family, storage impact, and business calendar constraints.",
+        "5. **Operationalize:** convert prototype rules into SAP ILM/ADK jobs, retention warehouse controls, and monitoring KPIs.",
+    ]
+    if len(packages):
+        lines.extend(["", "### Top archive packages", "", "| Package | Object | Records | Size GB | Avg score | Runtime min |", "| --- | --- | ---: | ---: | ---: | ---: |"])
+        for _, r in packages.head(10).iterrows():
+            lines.append(
+                f"| {r['archive_package']} | {r['archiving_object']} | {int(r['records']):,} | {r['size_gb']} | {r['avg_score']} | {int(r['estimated_runtime_min'])} |"
+            )
+    return "\n".join(lines)
+
+
 with st.sidebar:
     st.markdown("### SAP Archiving Assistant")
     st.caption("Prototype • Synthetic data only")
-
     st.markdown("#### Dataset")
     seed = st.number_input("Random seed", value=42, step=1, min_value=0, max_value=9999)
     n_per_object = st.slider("Records per object", 100, 800, 350, step=50)
-
-    if st.button("🔄 Regenerate dataset", width="stretch"):
+    if st.button("Regenerate dataset", width="stretch"):
         st.cache_data.clear()
-
-    st.markdown("---")
-    st.markdown("#### Filters")
 
 df = load_data(int(seed), int(n_per_object))
 
 with st.sidebar:
+    st.markdown("---")
+    st.markdown("#### Global filters")
     objects_avail = sorted(df["archiving_object"].unique().tolist())
-    sel_objects = st.multiselect("Archiving object", objects_avail, default=objects_avail)
-
     modules_avail = sorted(df["module"].unique().tolist())
-    sel_modules = st.multiselect("Module", modules_avail, default=modules_avail)
-
     company_codes = sorted(df["company_code"].unique().tolist())
-    sel_company = st.multiselect("Company code", company_codes, default=company_codes)
-
     statuses_avail = sorted(df["status"].unique().tolist())
-    sel_status = st.multiselect("Status", statuses_avail, default=statuses_avail)
 
+    sel_objects = st.multiselect("Archiving object", objects_avail, default=objects_avail)
+    sel_modules = st.multiselect("Module", modules_avail, default=modules_avail)
+    sel_company = st.multiselect("Company code", company_codes, default=company_codes)
+    sel_status = st.multiselect("Status", statuses_avail, default=statuses_avail)
     min_score = st.slider("Min archivability score", 0, 100, 0, step=5)
     only_archivable = st.checkbox("Only show ARCHIVE candidates", value=False)
     exclude_legal_hold = st.checkbox("Exclude legal-hold records", value=True)
+    search_text = st.text_input("Search object ID/table/status", value="")
 
     st.markdown("---")
+    client_name = st.text_input("Client / program name", value="SAP Data Archiving Assessment")
     ml_label = "scikit-learn IsolationForest" if SKLEARN_AVAILABLE else "Heuristic fallback"
     chart_label = "Plotly" if PLOTLY_AVAILABLE else "Streamlit native"
-    st.caption(f"**Anomaly engine:** {ml_label}")
-    st.caption(f"**Chart engine:** {chart_label}")
+    st.caption(f"Anomaly engine: {ml_label}")
+    st.caption(f"Chart engine: {chart_label}")
 
-
-# Apply filters
 mask = (
     df["archiving_object"].isin(sel_objects)
     & df["module"].isin(sel_modules)
@@ -226,453 +482,668 @@ mask = (
     & (df["archivability_score"] >= min_score)
 )
 if only_archivable:
-    mask &= df["recommendation"] == "ARCHIVE"
+    mask &= df["recommendation"].eq("ARCHIVE")
 if exclude_legal_hold:
     mask &= ~df["legal_hold"]
+if search_text.strip():
+    q = search_text.strip().lower()
+    mask &= (
+        df["object_id"].str.lower().str.contains(q)
+        | df["archiving_object"].str.lower().str.contains(q)
+        | df["table"].str.lower().str.contains(q)
+        | df["status"].str.lower().str.contains(q)
+    )
 
 fdf = df[mask].copy()
+issues = detect_data_issues(fdf) if len(fdf) else {
+    "duplicates": 0,
+    "inconsistencies": 0,
+    "incomplete_workflows": 0,
+    "stale_open": 0,
+    "errors": 0,
+    "legal_holds": 0,
+}
+obj_summary = summary_by_object(fdf) if len(fdf) else pd.DataFrame()
+cleanup_backlog = build_cleanup_backlog(fdf)
 
+total = len(fdf)
+archive_n = int((fdf["recommendation"] == "ARCHIVE").sum()) if total else 0
+review_n = int((fdf["recommendation"] == "REVIEW").sum()) if total else 0
+remediate_n = int(fdf["recommendation"].isin(["REMEDIATE", "DEDUPLICATE"]).sum()) if total else 0
+retain_n = int((fdf["recommendation"] == "RETAIN").sum()) if total else 0
+total_size_gb = gb(fdf["size_mb"]) if total else 0.0
+archive_size_gb = gb(fdf.loc[fdf["recommendation"] == "ARCHIVE", "size_mb"]) if total else 0.0
+pct_archivable = pct(archive_n, total)
 
-# ---------- Header ----------
 st.markdown(
     f"""
     <div class="brand-bar">
       <h1>SAP Archiving Assistant</h1>
-      <p>AI-assisted archivability analysis across simulated SAP ECC business objects.
-      Identify cleanup candidates, surface data-quality risks, and prioritize archive runs.</p>
+      <p><b>{client_name}</b> — client-ready prototype for SAP archiving discovery, cleanup planning,
+      archive package sequencing, and policy what-if analysis.</p>
       <div class="badges">
-        <span class="pill">Synthetic data</span>
+        <span class="pill">Synthetic SAP ECC/S/4 data</span>
         <span class="pill">Anomaly: {ml_label}</span>
         <span class="pill">Charts: {chart_label}</span>
-        <span class="pill">{len(df):,} total records</span>
+        <span class="pill">{len(df):,} generated records</span>
       </div>
     </div>
     """,
     unsafe_allow_html=True,
 )
 
-
-# ---------- Executive summary ----------
-total = len(fdf)
-archive_n = int((fdf["recommendation"] == "ARCHIVE").sum())
-review_n = int((fdf["recommendation"] == "REVIEW").sum())
-remediate_n = int(fdf["recommendation"].isin(["REMEDIATE", "DEDUPLICATE"]).sum())
-retain_n = int((fdf["recommendation"] == "RETAIN").sum())
-total_size_gb = round(fdf["size_mb"].sum() / 1024, 2)
-archive_size_gb = round(
-    fdf.loc[fdf["recommendation"] == "ARCHIVE", "size_mb"].sum() / 1024, 2
-)
-pct_archivable = round(100.0 * archive_n / max(total, 1), 1)
-issues = detect_data_issues(fdf)
-
-st.markdown(
-    f"""
-    <div class="section">
-      <h2>Executive summary <span class="hint">snapshot of current filter</span></h2>
-      <p style="margin:0;color:{INK};font-size:14px;line-height:1.55;">
-        Across <b>{total:,}</b> filtered records (<b>{total_size_gb:,} GB</b>),
-        <b>{archive_n:,}</b> ({pct_archivable}%) are high-confidence archive candidates,
-        reclaiming up to <b>{archive_size_gb:,} GB</b> of online storage.
-        <b>{review_n:,}</b> need manual review, <b>{remediate_n:,}</b> require data remediation,
-        and <b>{retain_n:,}</b> should remain online.
-      </p>
-    </div>
-    """,
-    unsafe_allow_html=True,
+tabs = st.tabs(
+    [
+        "Executive Cockpit",
+        "Scan Results",
+        "Cleanup Backlog",
+        "Archive Planner",
+        "Object Drilldown",
+        "What-if Rules",
+        "Exports",
+    ]
 )
 
-
-# ---------- KPI cards ----------
-st.markdown(
-    f"""
-    <div class="kpi-grid">
-      <div class="kpi accent">
-        <div class="label">Records in scope</div>
-        <div class="value">{total:,}</div>
-        <div class="delta">{total_size_gb:,} GB online</div>
-      </div>
-      <div class="kpi good">
-        <div class="label">Archive candidates</div>
-        <div class="value">{archive_n:,}</div>
-        <div class="delta">{pct_archivable}% • {archive_size_gb:,} GB recoverable</div>
-      </div>
-      <div class="kpi warn">
-        <div class="label">Needs review / remediation</div>
-        <div class="value">{review_n + remediate_n:,}</div>
-        <div class="delta">{review_n:,} review · {remediate_n:,} remediate</div>
-      </div>
-      <div class="kpi danger">
-        <div class="label">Data quality findings</div>
-        <div class="value">{issues['duplicates'] + issues['inconsistencies']:,}</div>
-        <div class="delta">{issues['duplicates']:,} duplicates · {issues['inconsistencies']:,} inconsistencies</div>
-      </div>
-    </div>
-    <div style="height:18px"></div>
-    """,
-    unsafe_allow_html=True,
-)
-
-
-# ---------- Charts ----------
-def _color_for(recs: pd.Series) -> list:
-    return [STATUS_COLORS.get(r, "#888") for r in recs]
-
-
-col1, col2 = st.columns([1.2, 1])
-
-with col1:
-    st.markdown('<div class="section"><h2>Archivability by object <span class="hint">stacked recommendation breakdown</span></h2>', unsafe_allow_html=True)
-    by_obj = (
-        fdf.groupby(["archiving_object", "recommendation"]).size().reset_index(name="count")
-    )
-    if PLOTLY_AVAILABLE and len(by_obj):
-        fig = px.bar(
-            by_obj,
-            x="archiving_object",
-            y="count",
-            color="recommendation",
-            color_discrete_map=STATUS_COLORS,
-            barmode="stack",
-        )
-        fig.update_layout(
-            margin=dict(l=10, r=10, t=10, b=10),
-            height=340,
-            plot_bgcolor="white",
-            paper_bgcolor="white",
-            legend_title_text="",
-            xaxis_title="",
-            yaxis_title="Records",
-            font=dict(family="Inter", size=12, color=INK),
-        )
-        fig.update_xaxes(showgrid=False)
-        fig.update_yaxes(gridcolor="#eef2f5")
-        st.plotly_chart(fig, width="stretch")
-    else:
-        pivot = by_obj.pivot(index="archiving_object", columns="recommendation", values="count").fillna(0)
-        st.bar_chart(pivot)
-    st.markdown("</div>", unsafe_allow_html=True)
-
-with col2:
-    st.markdown('<div class="section"><h2>Recommendation mix</h2>', unsafe_allow_html=True)
-    mix = fdf["recommendation"].value_counts().reset_index()
-    mix.columns = ["recommendation", "count"]
-    if PLOTLY_AVAILABLE and len(mix):
-        fig = px.pie(
-            mix,
-            values="count",
-            names="recommendation",
-            color="recommendation",
-            color_discrete_map=STATUS_COLORS,
-            hole=0.55,
-        )
-        fig.update_layout(
-            margin=dict(l=10, r=10, t=10, b=10),
-            height=340,
-            font=dict(family="Inter", size=12, color=INK),
-            showlegend=True,
-        )
-        fig.update_traces(textposition="outside", textinfo="label+percent")
-        st.plotly_chart(fig, width="stretch")
-    else:
-        st.bar_chart(mix.set_index("recommendation"))
-    st.markdown("</div>", unsafe_allow_html=True)
-
-
-col3, col4 = st.columns([1, 1])
-
-with col3:
-    st.markdown('<div class="section"><h2>Age vs archivability <span class="hint">size = record footprint, color = action</span></h2>', unsafe_allow_html=True)
-    sample = fdf.sample(min(len(fdf), 1500), random_state=1) if len(fdf) else fdf
-    if PLOTLY_AVAILABLE and len(sample):
-        fig = px.scatter(
-            sample,
-            x="age_days",
-            y="archivability_score",
-            color="recommendation",
-            size="size_mb",
-            size_max=22,
-            opacity=0.75,
-            hover_data=["object_id", "archiving_object", "status", "priority_score"],
-            color_discrete_map=STATUS_COLORS,
-        )
-        fig.update_layout(
-            margin=dict(l=10, r=10, t=10, b=10),
-            height=340,
-            plot_bgcolor="white",
-            paper_bgcolor="white",
-            legend_title_text="",
-            xaxis_title="Age (days)",
-            yaxis_title="Archivability score",
-            font=dict(family="Inter", size=12, color=INK),
-        )
-        fig.update_xaxes(gridcolor="#eef2f5")
-        fig.update_yaxes(gridcolor="#eef2f5", range=[0, 105])
-        st.plotly_chart(fig, width="stretch")
-    else:
-        if len(sample):
-            st.scatter_chart(sample, x="age_days", y="archivability_score", size="size_mb")
-        else:
-            st.info("No records match the current filters.")
-    st.markdown("</div>", unsafe_allow_html=True)
-
-with col4:
-    st.markdown('<div class="section"><h2>Storage recoverable by object <span class="hint">GB if archived now</span></h2>', unsafe_allow_html=True)
-    arch_only = fdf[fdf["recommendation"] == "ARCHIVE"]
-    storage = (
-        arch_only.groupby("archiving_object")["size_mb"].sum().div(1024).round(2).reset_index()
-    )
-    storage.columns = ["archiving_object", "GB recoverable"]
-    storage = storage.sort_values("GB recoverable", ascending=True)
-    if PLOTLY_AVAILABLE and len(storage):
-        fig = px.bar(
-            storage,
-            x="GB recoverable",
-            y="archiving_object",
-            orientation="h",
-            color_discrete_sequence=[PRIMARY],
-            text="GB recoverable",
-        )
-        fig.update_traces(textposition="outside")
-        fig.update_layout(
-            margin=dict(l=10, r=10, t=10, b=10),
-            height=340,
-            plot_bgcolor="white",
-            paper_bgcolor="white",
-            xaxis_title="GB",
-            yaxis_title="",
-            font=dict(family="Inter", size=12, color=INK),
-        )
-        fig.update_xaxes(gridcolor="#eef2f5")
-        fig.update_yaxes(showgrid=False)
-        st.plotly_chart(fig, width="stretch")
-    elif len(storage):
-        st.bar_chart(storage.set_index("archiving_object"))
-    else:
-        st.info("No archive candidates in current filter.")
-    st.markdown("</div>", unsafe_allow_html=True)
-
-
-# ---------- Data quality findings ----------
-st.markdown('<div class="section"><h2>Data-quality findings <span class="hint">cross-table scan</span></h2>', unsafe_allow_html=True)
-qcols = st.columns(6)
-labels = [
-    ("Duplicates", issues["duplicates"]),
-    ("Inconsistencies", issues["inconsistencies"]),
-    ("Incomplete workflows", issues["incomplete_workflows"]),
-    ("Stale OPEN >1y", issues["stale_open"]),
-    ("ERROR status", issues["errors"]),
-    ("Legal holds", issues["legal_holds"]),
-]
-for c, (lab, val) in zip(qcols, labels):
-    c.metric(lab, f"{val:,}")
-st.markdown("</div>", unsafe_allow_html=True)
-
-
-# ---------- Per-object summary table ----------
-st.markdown('<div class="section"><h2>Inventory by archiving object</h2>', unsafe_allow_html=True)
-obj_summary = summary_by_object(fdf) if len(fdf) else pd.DataFrame()
-if len(obj_summary):
-    st.dataframe(
-        obj_summary[
-            [
-                "archiving_object",
-                "module",
-                "description",
-                "records",
-                "total_size_gb",
-                "avg_age_years",
-                "legal_holds",
-                "duplicates",
-                "inconsistencies",
-            ]
-        ].rename(
-            columns={
-                "archiving_object": "Object",
-                "module": "Module",
-                "description": "Description",
-                "records": "Records",
-                "total_size_gb": "Size (GB)",
-                "avg_age_years": "Avg age (yrs)",
-                "legal_holds": "Legal holds",
-                "duplicates": "Dupes",
-                "inconsistencies": "Inconsist.",
-            }
-        ),
-        width="stretch",
-        hide_index=True,
-    )
-else:
-    st.info("No records match the current filters.")
-st.markdown("</div>", unsafe_allow_html=True)
-
-
-# ---------- Priority table ----------
-st.markdown('<div class="section"><h2>Priority candidates <span class="hint">sorted by priority score</span></h2>', unsafe_allow_html=True)
-
-priority_cols = [
-    "object_id",
-    "archiving_object",
-    "module",
-    "company_code",
-    "status",
-    "age_days",
-    "residence_months",
-    "workflow_completion",
-    "data_quality_score",
-    "anomaly_score",
-    "archivability_score",
-    "priority_score",
-    "size_mb",
-    "recommendation",
-    "rationale",
-]
-top = fdf.sort_values("priority_score", ascending=False)[priority_cols].head(50)
-st.dataframe(
-    top.rename(
-        columns={
-            "object_id": "Object ID",
-            "archiving_object": "Archiving Object",
-            "module": "Mod.",
-            "company_code": "CoCd",
-            "status": "Status",
-            "age_days": "Age (d)",
-            "residence_months": "Residence (mo)",
-            "workflow_completion": "Workflow %",
-            "data_quality_score": "DQ score",
-            "anomaly_score": "Anomaly",
-            "archivability_score": "Score",
-            "priority_score": "Priority",
-            "size_mb": "Size (MB)",
-            "recommendation": "Action",
-            "rationale": "Rationale",
-        }
-    ),
-    width="stretch",
-    hide_index=True,
-    column_config={
-        "Workflow %": st.column_config.ProgressColumn(format="%.2f", min_value=0, max_value=1),
-        "DQ score": st.column_config.ProgressColumn(format="%.2f", min_value=0, max_value=1),
-        "Anomaly": st.column_config.ProgressColumn(format="%.2f", min_value=0, max_value=1),
-        "Score": st.column_config.NumberColumn(format="%d"),
-        "Priority": st.column_config.NumberColumn(format="%d"),
-    },
-)
-st.markdown("</div>", unsafe_allow_html=True)
-
-
-# ---------- Drilldown ----------
-st.markdown('<div class="section"><h2>Object drilldown</h2>', unsafe_allow_html=True)
-ids_avail = top["object_id"].tolist() + fdf["object_id"].tolist()
-ids_avail = list(dict.fromkeys(ids_avail))[:500]
-if ids_avail:
-    pick = st.selectbox("Select an object to inspect", ids_avail, index=0)
-    rec = fdf[fdf["object_id"] == pick].iloc[0]
-
-    badge_color = STATUS_COLORS.get(rec["recommendation"], "#888")
+with tabs[0]:
     st.markdown(
         f"""
-        <div style="display:flex; align-items:center; gap:12px; margin: 4px 0 12px 0;">
-          <div style="font-family: 'JetBrains Mono', monospace; font-size: 18px; font-weight: 600;">
-            {rec['object_id']}
-          </div>
-          <span class="badge" style="background:{badge_color}; color:#fff;">{rec['recommendation']}</span>
-          <span class="badge" style="background:#eef3f6; color:{INK};">{rec['archiving_object']}</span>
-          <span class="badge" style="background:#eef3f6; color:{INK};">{rec['module']}</span>
-          <span style="color:{MUTED}; font-size:13px;">{rec['rationale']}</span>
+        <div class="section">
+          <h2>Executive summary</h2>
+          <p style="margin:0;color:{INK};font-size:14px;line-height:1.58;">
+            Across <b>{total:,}</b> filtered records (<b>{total_size_gb:,} GB</b>), the assistant identified
+            <b>{archive_n:,}</b> high-confidence archive candidates ({pct_archivable}%) with up to
+            <b>{archive_size_gb:,} GB</b> of recoverable online storage. <b>{review_n:,}</b> records need review,
+            <b>{remediate_n:,}</b> need remediation/deduplication, and <b>{retain_n:,}</b> should remain online.
+          </p>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    dcol1, dcol2, dcol3, dcol4 = st.columns(4)
-    dcol1.metric("Archivability", f"{rec['archivability_score']:.0f}", help="0-100 weighted rule score")
-    dcol2.metric("Priority", f"{rec['priority_score']:.0f}")
-    dcol3.metric("Anomaly", f"{rec['anomaly_score']:.2f}")
-    dcol4.metric("Size", f"{rec['size_mb']:.1f} MB")
+    render_kpis(
+        [
+            {"label": "Records in scope", "value": f"{total:,}", "delta": f"{total_size_gb:,} GB online footprint", "style": "accent"},
+            {"label": "Archive candidates", "value": f"{archive_n:,}", "delta": f"{pct_archivable}% ready • {archive_size_gb:,} GB recoverable", "style": "good"},
+            {"label": "Review / remediation", "value": f"{review_n + remediate_n:,}", "delta": f"{review_n:,} review · {remediate_n:,} remediate", "style": "warn"},
+            {"label": "Data quality findings", "value": f"{issues['duplicates'] + issues['inconsistencies']:,}", "delta": f"{issues['duplicates']:,} duplicates · {issues['inconsistencies']:,} inconsistencies", "style": "danger"},
+            {"label": "Open workflow gaps", "value": f"{issues['incomplete_workflows']:,}", "delta": f"{issues['stale_open']:,} stale OPEN records", "style": "purple"},
+        ]
+    )
 
-    dcol5, dcol6, dcol7, dcol8 = st.columns(4)
-    dcol5.metric("Status", rec["status"])
-    dcol6.metric("Age", f"{int(rec['age_days'])} d")
-    dcol7.metric("Residence", f"{rec['residence_months']} mo / {rec['min_residence_months']}+")
-    dcol8.metric("Workflow", f"{rec['workflow_completion']*100:.0f}%")
+    c1, c2 = st.columns([1.15, 1])
+    with c1:
+        st.markdown('<div class="section"><h2>Recommendation mix</h2>', unsafe_allow_html=True)
+        mix = recommendation_counts(fdf) if total else pd.DataFrame(columns=["recommendation", "count"])
+        if PLOTLY_AVAILABLE and len(mix):
+            fig = px.bar(
+                mix,
+                x="recommendation",
+                y="count",
+                color="recommendation",
+                color_discrete_map=STATUS_COLORS,
+                text="count",
+            )
+            fig.update_traces(textposition="outside")
+            fig_layout(fig, 330)
+            fig.update_xaxes(title="")
+            fig.update_yaxes(title="Records", gridcolor="#eef2f5")
+            st.plotly_chart(fig, width="stretch")
+        else:
+            st.bar_chart(mix.set_index("recommendation"))
+        st.markdown("</div>", unsafe_allow_html=True)
 
-    # Rule pass/fail breakdown
-    st.markdown("**Rule evaluation**")
-    rule_rows = []
-    from archivability import RULES, RULE_WEIGHTS  # late import to avoid cycles
-    for key, _, label in RULES:
-        passed = bool(rec[f"rule_{key}"])
-        rule_rows.append(
-            {
-                "Rule": label,
-                "Weight": RULE_WEIGHTS[key],
-                "Passed": "✅" if passed else "❌",
-                "Contribution": RULE_WEIGHTS[key] if passed else 0,
-            }
+    with c2:
+        st.markdown('<div class="section"><h2>Storage recoverable by object</h2>', unsafe_allow_html=True)
+        storage = (
+            fdf[fdf["recommendation"] == "ARCHIVE"]
+            .groupby("archiving_object")["size_mb"]
+            .sum()
+            .div(1024)
+            .round(2)
+            .reset_index(name="GB recoverable")
+            .sort_values("GB recoverable", ascending=True)
         )
-    st.dataframe(pd.DataFrame(rule_rows), width="stretch", hide_index=True)
+        if PLOTLY_AVAILABLE and len(storage):
+            fig = px.bar(storage, x="GB recoverable", y="archiving_object", orientation="h", text="GB recoverable", color_discrete_sequence=[PRIMARY])
+            fig.update_traces(textposition="outside")
+            fig_layout(fig, 330)
+            fig.update_xaxes(title="GB", gridcolor="#eef2f5")
+            fig.update_yaxes(title="")
+            st.plotly_chart(fig, width="stretch")
+        elif len(storage):
+            st.bar_chart(storage.set_index("archiving_object"))
+        else:
+            st.info("No archive candidates in the current filter.")
+        st.markdown("</div>", unsafe_allow_html=True)
 
-    flag_bits = []
-    if rec["legal_hold"]:
-        flag_bits.append('<span class="badge" style="background:#a83232;color:#fff;">LEGAL HOLD</span>')
-    if rec["has_open_dependencies"]:
-        flag_bits.append('<span class="badge" style="background:#c97a17;color:#fff;">OPEN DEPENDENCIES</span>')
-    if rec["duplicate_flag"]:
-        flag_bits.append('<span class="badge" style="background:#7a3aa8;color:#fff;">DUPLICATE</span>')
-    if rec["inconsistency_flag"]:
-        flag_bits.append('<span class="badge" style="background:#c97a17;color:#fff;">INCONSISTENT</span>')
-    if flag_bits:
-        st.markdown(" ".join(flag_bits), unsafe_allow_html=True)
-else:
-    st.info("No records to drill into.")
-st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown('<div class="section"><h2>Readiness by archiving object</h2>', unsafe_allow_html=True)
+    if len(obj_summary):
+        readiness = (
+            fdf.groupby("archiving_object")
+            .agg(
+                records=("object_id", "count"),
+                archive=("recommendation", lambda s: int((s == "ARCHIVE").sum())),
+                avg_score=("archivability_score", "mean"),
+                blockers=("blocked", "sum"),
+            )
+            .reset_index()
+        )
+        readiness["archive_rate"] = (100 * readiness["archive"] / readiness["records"]).round(1)
+        readiness["avg_score"] = readiness["avg_score"].round(1)
+        st.dataframe(
+            readiness.rename(
+                columns={
+                    "archiving_object": "Archiving Object",
+                    "records": "Records",
+                    "archive": "Archive Ready",
+                    "avg_score": "Avg Score",
+                    "blockers": "Hard Blockers",
+                    "archive_rate": "Archive Rate %",
+                }
+            ),
+            width="stretch",
+            hide_index=True,
+        )
+    else:
+        st.info("No records match the current filters.")
+    st.markdown("</div>", unsafe_allow_html=True)
 
+with tabs[1]:
+    c1, c2 = st.columns([1.2, 1])
+    with c1:
+        st.markdown('<div class="section"><h2>Archivability by object and action</h2>', unsafe_allow_html=True)
+        by_obj = fdf.groupby(["archiving_object", "recommendation"]).size().reset_index(name="count") if total else pd.DataFrame()
+        if PLOTLY_AVAILABLE and len(by_obj):
+            fig = px.bar(
+                by_obj,
+                x="archiving_object",
+                y="count",
+                color="recommendation",
+                color_discrete_map=STATUS_COLORS,
+                barmode="stack",
+            )
+            fig_layout(fig, 360)
+            fig.update_xaxes(title="", showgrid=False)
+            fig.update_yaxes(title="Records", gridcolor="#eef2f5")
+            st.plotly_chart(fig, width="stretch")
+        elif len(by_obj):
+            st.bar_chart(by_obj.pivot(index="archiving_object", columns="recommendation", values="count").fillna(0))
+        else:
+            st.info("No records match the current filters.")
+        st.markdown("</div>", unsafe_allow_html=True)
 
-# ---------- Export ----------
-st.markdown('<div class="section"><h2>Export</h2>', unsafe_allow_html=True)
+    with c2:
+        st.markdown('<div class="section"><h2>Data-quality finding counts</h2>', unsafe_allow_html=True)
+        qdata = pd.DataFrame(
+            [
+                ("Duplicates", issues["duplicates"]),
+                ("Inconsistencies", issues["inconsistencies"]),
+                ("Incomplete workflows", issues["incomplete_workflows"]),
+                ("Stale OPEN >1y", issues["stale_open"]),
+                ("ERROR status", issues["errors"]),
+                ("Legal holds", issues["legal_holds"]),
+            ],
+            columns=["Finding", "Count"],
+        )
+        if PLOTLY_AVAILABLE:
+            fig = px.bar(qdata.sort_values("Count"), x="Count", y="Finding", orientation="h", text="Count", color_discrete_sequence=["#c97a17"])
+            fig.update_traces(textposition="outside")
+            fig_layout(fig, 360)
+            fig.update_xaxes(gridcolor="#eef2f5")
+            fig.update_yaxes(title="")
+            st.plotly_chart(fig, width="stretch")
+        else:
+            st.bar_chart(qdata.set_index("Finding"))
+        st.markdown("</div>", unsafe_allow_html=True)
 
-ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
-csv_buf = io.StringIO()
-fdf.to_csv(csv_buf, index=False)
+    st.markdown('<div class="section"><h2>Inventory by archiving object</h2>', unsafe_allow_html=True)
+    if len(obj_summary):
+        st.dataframe(
+            obj_summary[
+                [
+                    "archiving_object",
+                    "module",
+                    "description",
+                    "records",
+                    "total_size_gb",
+                    "avg_age_years",
+                    "legal_holds",
+                    "duplicates",
+                    "inconsistencies",
+                ]
+            ].rename(
+                columns={
+                    "archiving_object": "Object",
+                    "module": "Module",
+                    "description": "Description",
+                    "records": "Records",
+                    "total_size_gb": "Size (GB)",
+                    "avg_age_years": "Avg age (yrs)",
+                    "legal_holds": "Legal holds",
+                    "duplicates": "Dupes",
+                    "inconsistencies": "Inconsist.",
+                }
+            ),
+            width="stretch",
+            hide_index=True,
+        )
+    else:
+        st.info("No records match the current filters.")
+    st.markdown("</div>", unsafe_allow_html=True)
 
-md_report = build_markdown_report(
-    fdf, issues, summary_by_object(fdf) if len(fdf) else pd.DataFrame(
-        columns=["archiving_object", "module", "records", "total_size_gb", "avg_age_years"]
-    )
-)
-
-ec1, ec2, ec3 = st.columns(3)
-with ec1:
-    st.download_button(
-        "⬇️ Download filtered records (CSV)",
-        data=csv_buf.getvalue(),
-        file_name=f"sap_archiving_records_{ts}.csv",
-        mime="text/csv",
+    st.markdown('<div class="section"><h2>Full scan results</h2>', unsafe_allow_html=True)
+    scan_cols = [
+        "object_id",
+        "archiving_object",
+        "module",
+        "company_code",
+        "status",
+        "age_days",
+        "days_since_activity",
+        "workflow_completion",
+        "data_quality_score",
+        "anomaly_score",
+        "archivability_score",
+        "priority_score",
+        "size_mb",
+        "recommendation",
+        "rationale",
+    ]
+    st.dataframe(
+        fdf.sort_values("priority_score", ascending=False)[scan_cols].rename(
+            columns={
+                "object_id": "Object ID",
+                "archiving_object": "Archiving Object",
+                "module": "Module",
+                "company_code": "CoCd",
+                "status": "Status",
+                "age_days": "Age (days)",
+                "days_since_activity": "Idle days",
+                "workflow_completion": "Workflow %",
+                "data_quality_score": "DQ Score",
+                "anomaly_score": "Anomaly",
+                "archivability_score": "Archive Score",
+                "priority_score": "Priority",
+                "size_mb": "Size MB",
+                "recommendation": "Action",
+                "rationale": "Rationale",
+            }
+        ),
         width="stretch",
+        hide_index=True,
     )
-with ec2:
-    st.download_button(
-        "⬇️ Download executive report (Markdown)",
-        data=md_report,
-        file_name=f"sap_archiving_report_{ts}.md",
-        mime="text/markdown",
-        width="stretch",
-    )
-with ec3:
-    archive_only = fdf[fdf["recommendation"] == "ARCHIVE"]
-    arch_csv = io.StringIO()
-    archive_only.to_csv(arch_csv, index=False)
-    st.download_button(
-        "⬇️ Download ARCHIVE worklist (CSV)",
-        data=arch_csv.getvalue(),
-        file_name=f"sap_archive_worklist_{ts}.csv",
-        mime="text/csv",
-        width="stretch",
-    )
-st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
+with tabs[2]:
+    st.markdown('<div class="section"><h2>Cleanup backlog summary</h2>', unsafe_allow_html=True)
+    if len(cleanup_backlog):
+        backlog_summary = (
+            cleanup_backlog.groupby(["issue_type", "owner_group", "effort"], as_index=False)
+            .agg(records=("object_id", "count"), size_gb=("size_mb", lambda s: round(s.sum() / 1024, 2)))
+            .sort_values("records", ascending=False)
+        )
+        c1, c2 = st.columns([1, 1])
+        with c1:
+            st.dataframe(
+                backlog_summary.rename(
+                    columns={
+                        "issue_type": "Issue Type",
+                        "owner_group": "Owner Group",
+                        "effort": "Effort",
+                        "records": "Records",
+                        "size_gb": "Size GB",
+                    }
+                ),
+                width="stretch",
+                hide_index=True,
+            )
+        with c2:
+            if PLOTLY_AVAILABLE:
+                fig = px.bar(backlog_summary, x="records", y="issue_type", color="effort", orientation="h", text="records")
+                fig.update_traces(textposition="outside")
+                fig_layout(fig, 320)
+                fig.update_xaxes(title="Records", gridcolor="#eef2f5")
+                fig.update_yaxes(title="")
+                st.plotly_chart(fig, width="stretch")
+        st.markdown("</div>", unsafe_allow_html=True)
 
-# ---------- Footer ----------
+        st.markdown('<div class="section"><h2>Remediation playbook</h2>', unsafe_allow_html=True)
+        playbook = [
+            ("Legal hold", "Confirm hold source, retention authority, and exclusion rules before archive package release."),
+            ("Duplicate", "Create duplicate cluster report, identify golden document, and de-duplicate or mark survivors."),
+            ("Data inconsistency", "Resolve status/reference mismatch, missing dependencies, or failed posting metadata."),
+            ("Open dependency", "Clear document flow, settlement, invoice, delivery, or workflow dependencies."),
+            ("Incomplete workflow", "Close, cancel, or route workflow item to business owner for disposition."),
+        ]
+        for title, body in playbook:
+            st.markdown(f"<div class='playbook'><b>{title}</b><br><span class='hint'>{body}</span></div>", unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        st.markdown('<div class="section"><h2>Detailed cleanup backlog</h2>', unsafe_allow_html=True)
+        backlog_cols = [
+            "object_id",
+            "archiving_object",
+            "company_code",
+            "status",
+            "issue_type",
+            "owner_group",
+            "effort",
+            "target_sla_days",
+            "priority_score",
+            "size_mb",
+            "suggested_action",
+        ]
+        st.dataframe(
+            cleanup_backlog[backlog_cols].head(300).rename(
+                columns={
+                    "object_id": "Object ID",
+                    "archiving_object": "Archiving Object",
+                    "company_code": "CoCd",
+                    "status": "Status",
+                    "issue_type": "Issue",
+                    "owner_group": "Owner",
+                    "effort": "Effort",
+                    "target_sla_days": "SLA Days",
+                    "priority_score": "Priority",
+                    "size_mb": "Size MB",
+                    "suggested_action": "Suggested Action",
+                }
+            ),
+            width="stretch",
+            hide_index=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+    else:
+        st.success("No cleanup backlog for the current filters.")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+with tabs[3]:
+    pcol1, pcol2 = st.columns([0.35, 0.65])
+    with pcol1:
+        st.markdown('<div class="section"><h2>Package planning controls</h2>', unsafe_allow_html=True)
+        max_package_gb = st.slider("Max package size (GB)", 0.25, 10.0, 2.5, step=0.25)
+        max_records = st.slider("Max records per package", 50, 1000, 250, step=50)
+        st.caption("Packages are sequenced by object, priority, and estimated footprint.")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    package_summary, package_detail = build_archive_packages(fdf, max_package_gb, max_records)
+    with pcol2:
+        render_kpis(
+            [
+                {"label": "Archive packages", "value": f"{len(package_summary):,}", "delta": "Generated from current ARCHIVE candidates", "style": "accent"},
+                {"label": "Packaged records", "value": f"{len(package_detail):,}", "delta": f"{gb(package_detail['size_mb']) if len(package_detail) else 0:,} GB", "style": "good"},
+                {"label": "Avg runtime", "value": f"{round(package_summary['estimated_runtime_min'].mean(), 0):.0f} min" if len(package_summary) else "0 min", "delta": "Rough synthetic estimate per package", "style": "warn"},
+                {"label": "Largest package", "value": f"{package_summary['size_gb'].max():.2f} GB" if len(package_summary) else "0 GB", "delta": "Bounded by package control", "style": "purple"},
+                {"label": "Recoverable", "value": f"{archive_size_gb:,} GB", "delta": "From current archive-ready set", "style": "good"},
+            ]
+        )
+
+    st.markdown('<div class="section"><h2>Archive run packages</h2>', unsafe_allow_html=True)
+    if len(package_summary):
+        c1, c2 = st.columns([1, 1])
+        with c1:
+            st.dataframe(
+                package_summary[
+                    [
+                        "sequence",
+                        "archive_package",
+                        "archiving_object",
+                        "module",
+                        "records",
+                        "size_gb",
+                        "avg_score",
+                        "estimated_runtime_min",
+                        "oldest_days",
+                    ]
+                ].rename(
+                    columns={
+                        "sequence": "Seq",
+                        "archive_package": "Package",
+                        "archiving_object": "Object",
+                        "module": "Module",
+                        "records": "Records",
+                        "size_gb": "Size GB",
+                        "avg_score": "Avg Score",
+                        "estimated_runtime_min": "Runtime Min",
+                        "oldest_days": "Oldest Age Days",
+                    }
+                ),
+                width="stretch",
+                hide_index=True,
+            )
+        with c2:
+            if PLOTLY_AVAILABLE:
+                fig = px.bar(package_summary, x="archive_package", y="size_gb", color="archiving_object", text="records")
+                fig_layout(fig, 390)
+                fig.update_xaxes(title="", tickangle=-35)
+                fig.update_yaxes(title="Size GB", gridcolor="#eef2f5")
+                st.plotly_chart(fig, width="stretch")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        st.markdown('<div class="section"><h2>Pilot package recommendation</h2>', unsafe_allow_html=True)
+        pilot = package_summary.sort_values(["avg_score", "size_gb"], ascending=[False, True]).head(1)
+        if len(pilot):
+            r = pilot.iloc[0]
+            st.success(
+                f"Recommended pilot: {r['archive_package']} ({int(r['records']):,} records, {r['size_gb']} GB, average score {r['avg_score']}). "
+                "Use this as a low-risk archive write/read validation package before scaling."
+            )
+        st.markdown("</div>", unsafe_allow_html=True)
+    else:
+        st.info("No ARCHIVE candidates available for package planning under the current filters.")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+with tabs[4]:
+    st.markdown('<div class="section"><h2>Object drilldown</h2>', unsafe_allow_html=True)
+    ids_avail = (
+        fdf.sort_values("priority_score", ascending=False)["object_id"].drop_duplicates().head(800).tolist()
+        if len(fdf)
+        else []
+    )
+    if ids_avail:
+        pick = st.selectbox("Select an object to inspect", ids_avail, index=0)
+        rec = fdf[fdf["object_id"] == pick].iloc[0]
+        badge_color = STATUS_COLORS.get(rec["recommendation"], "#888")
+        st.markdown(
+            f"""
+            <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin: 4px 0 14px 0;">
+              <div style="font-family:'JetBrains Mono', monospace; font-size:18px; font-weight:700;">{rec['object_id']}</div>
+              <span class="badge" style="background:{badge_color}; color:#fff;">{rec['recommendation']}</span>
+              <span class="badge" style="background:#eef3f6; color:{INK};">{rec['archiving_object']}</span>
+              <span class="badge" style="background:#eef3f6; color:{INK};">{rec['module']}</span>
+              <span class="hint">{rec['rationale']}</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        dcol1, dcol2, dcol3, dcol4, dcol5 = st.columns(5)
+        dcol1.metric("Archivability", f"{rec['archivability_score']:.0f}")
+        dcol2.metric("Priority", f"{rec['priority_score']:.0f}")
+        dcol3.metric("Anomaly", f"{rec['anomaly_score']:.2f}")
+        dcol4.metric("Size", f"{rec['size_mb']:.1f} MB")
+        dcol5.metric("Workflow", f"{rec['workflow_completion']*100:.0f}%")
+
+        d1, d2 = st.columns([0.48, 0.52])
+        with d1:
+            st.markdown("**Record attributes**")
+            attrs = pd.DataFrame(
+                [
+                    ("Object", rec["archiving_object"]),
+                    ("Table", rec["table"]),
+                    ("Company Code", rec["company_code"]),
+                    ("Plant", rec["plant"] or "n/a"),
+                    ("Status", rec["status"]),
+                    ("Created On", str(rec["created_on"].date())),
+                    ("Last Activity", str(rec["last_activity_on"].date())),
+                    ("Residence", f"{rec['residence_months']} mo / {rec['min_residence_months']}+ required"),
+                    ("Failed Rules", rec["failed_rules"]),
+                ],
+                columns=["Attribute", "Value"],
+            )
+            st.dataframe(attrs, width="stretch", hide_index=True)
+        with d2:
+            st.markdown("**Rule evaluation**")
+            rule_rows = []
+            for key, _, label in RULES:
+                passed = bool(rec[f"rule_{key}"])
+                rule_rows.append(
+                    {
+                        "Rule": label,
+                        "Weight": RULE_WEIGHTS[key],
+                        "Passed": "PASS" if passed else "FAIL",
+                        "Contribution": RULE_WEIGHTS[key] if passed else 0,
+                    }
+                )
+            st.dataframe(pd.DataFrame(rule_rows), width="stretch", hide_index=True)
+
+        flags = []
+        if rec["legal_hold"]:
+            flags.append("LEGAL HOLD")
+        if rec["has_open_dependencies"]:
+            flags.append("OPEN DEPENDENCIES")
+        if rec["duplicate_flag"]:
+            flags.append("DUPLICATE")
+        if rec["inconsistency_flag"]:
+            flags.append("INCONSISTENT")
+        if flags:
+            st.warning("Blocking / cleanup flags: " + ", ".join(flags))
+        else:
+            st.success("No hard blockers detected for this object.")
+    else:
+        st.info("No records to drill into.")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+with tabs[5]:
+    st.markdown('<div class="section"><h2>What-if archivability rules</h2>', unsafe_allow_html=True)
+    w1, w2, w3, w4 = st.columns(4)
+    residence_buffer = w1.slider("Residence buffer months", -12, 24, 0, step=3)
+    workflow_threshold = w2.slider("Workflow completion threshold", 0.70, 1.00, 0.95, step=0.01)
+    dq_threshold = w3.slider("Data quality threshold", 0.40, 0.95, 0.70, step=0.05)
+    idle_months = w4.slider("No-activity threshold months", 3, 36, 12, step=3)
+    scenario = build_scenario(fdf, residence_buffer, workflow_threshold, dq_threshold, idle_months)
+    scenario_ready = int(scenario["scenario_archive_ready"].sum()) if len(scenario) else 0
+    current_ready = archive_n
+    delta_ready = scenario_ready - current_ready
+    scenario_gb = gb(scenario.loc[scenario["scenario_archive_ready"], "size_mb"]) if len(scenario) else 0
+
+    render_kpis(
+        [
+            {"label": "Current archive-ready", "value": f"{current_ready:,}", "delta": "Based on baseline rules", "style": "accent"},
+            {"label": "Scenario archive-ready", "value": f"{scenario_ready:,}", "delta": f"{scenario_gb:,} GB recoverable", "style": "good"},
+            {"label": "Ready delta", "value": f"{delta_ready:+,}", "delta": "Change versus baseline", "style": "warn" if delta_ready < 0 else "good"},
+            {"label": "Workflow threshold", "value": f"{workflow_threshold*100:.0f}%", "delta": "Configurable client policy", "style": "purple"},
+            {"label": "Residence buffer", "value": f"{residence_buffer:+} mo", "delta": "Added to object minimum", "style": "accent"},
+        ]
+    )
+
+    if len(scenario):
+        comparison = (
+            scenario.groupby("archiving_object")
+            .agg(
+                records=("object_id", "count"),
+                current_ready=("recommendation", lambda s: int((s == "ARCHIVE").sum())),
+                scenario_ready=("scenario_archive_ready", "sum"),
+                scenario_gb=("size_mb", lambda s: 0),
+            )
+            .reset_index()
+        )
+        scenario_gb_by_obj = (
+            scenario[scenario["scenario_archive_ready"]]
+            .groupby("archiving_object")["size_mb"]
+            .sum()
+            .div(1024)
+            .round(2)
+        )
+        comparison["scenario_gb"] = comparison["archiving_object"].map(scenario_gb_by_obj).fillna(0)
+        comparison["delta"] = comparison["scenario_ready"] - comparison["current_ready"]
+
+        c1, c2 = st.columns([1, 1])
+        with c1:
+            st.dataframe(
+                comparison.rename(
+                    columns={
+                        "archiving_object": "Object",
+                        "records": "Records",
+                        "current_ready": "Current Ready",
+                        "scenario_ready": "Scenario Ready",
+                        "scenario_gb": "Scenario GB",
+                        "delta": "Delta",
+                    }
+                ),
+                width="stretch",
+                hide_index=True,
+            )
+        with c2:
+            if PLOTLY_AVAILABLE:
+                fig = go.Figure()
+                fig.add_bar(name="Current", x=comparison["archiving_object"], y=comparison["current_ready"], marker_color=PRIMARY)
+                fig.add_bar(name="Scenario", x=comparison["archiving_object"], y=comparison["scenario_ready"], marker_color="#c97a17")
+                fig_layout(fig, 350)
+                fig.update_layout(barmode="group")
+                fig.update_xaxes(title="", tickangle=-25)
+                fig.update_yaxes(title="Records", gridcolor="#eef2f5")
+                st.plotly_chart(fig, width="stretch")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+with tabs[6]:
+    st.markdown('<div class="section"><h2>Exports and client handoff</h2>', unsafe_allow_html=True)
+    ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+    package_summary, package_detail = build_archive_packages(fdf, 2.5, 250)
+    report_text = client_report(fdf, package_summary, cleanup_backlog, issues, obj_summary)
+
+    csv_buf = io.StringIO()
+    fdf.to_csv(csv_buf, index=False)
+    backlog_buf = io.StringIO()
+    cleanup_backlog.to_csv(backlog_buf, index=False)
+    package_buf = io.StringIO()
+    package_summary.to_csv(package_buf, index=False)
+
+    e1, e2, e3, e4 = st.columns(4)
+    with e1:
+        st.download_button(
+            "Download scan results CSV",
+            data=csv_buf.getvalue(),
+            file_name=f"sap_archiving_scan_results_{ts}.csv",
+            mime="text/csv",
+            width="stretch",
+        )
+    with e2:
+        st.download_button(
+            "Download cleanup backlog CSV",
+            data=backlog_buf.getvalue(),
+            file_name=f"sap_archiving_cleanup_backlog_{ts}.csv",
+            mime="text/csv",
+            width="stretch",
+        )
+    with e3:
+        st.download_button(
+            "Download archive packages CSV",
+            data=package_buf.getvalue(),
+            file_name=f"sap_archiving_packages_{ts}.csv",
+            mime="text/csv",
+            width="stretch",
+        )
+    with e4:
+        st.download_button(
+            "Download client report MD",
+            data=report_text,
+            file_name=f"sap_archiving_client_report_{ts}.md",
+            mime="text/markdown",
+            width="stretch",
+        )
+
+    st.markdown("**Client-demo talking points**")
+    st.markdown(
+        """
+        - Show the Executive Cockpit first to frame value: storage reclaimed, blockers, and archive readiness.
+        - Use Scan Results to explain how rules and anomaly scoring identify risk.
+        - Use Cleanup Backlog to convert findings into remediation owners and action plans.
+        - Use Archive Planner to demonstrate package sequencing for SAP ADK/ILM archive runs.
+        - Use What-if Rules to show how policy changes affect archive readiness.
+        """
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
+
 st.markdown(
     f"""
     <div class="footer">
