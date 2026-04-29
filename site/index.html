@@ -131,7 +131,7 @@
         <span class="pill">Plotly (graceful fallback)</span>
       </div>
       <div class="cta-row">
-        <a class="btn btn-primary" href="http://localhost:8501" id="launch-link">Launch Streamlit app →</a>
+        <a class="btn btn-primary" href="http://localhost:8501" id="launch-link" target="_blank" rel="noopener noreferrer">Launch Streamlit app →</a>
         <a class="btn btn-ghost" href="../README.md">Read the README</a>
       </div>
     </header>
@@ -162,7 +162,7 @@
 <pre><code>cd sap-archiving-assistant
 pip install -r requirements.txt
 streamlit run app.py --server.port 8501 --server.address 0.0.0.0</code></pre>
-      <p>Then open <a href="http://localhost:8501">http://localhost:8501</a> —
+      <p>Then open <a href="http://localhost:8501" id="local-link" target="_blank" rel="noopener noreferrer">http://localhost:8501</a> —
          this launcher's <b>Launch Streamlit app</b> button points to the same URL.</p>
     </section>
 
@@ -191,5 +191,15 @@ streamlit run app.py --server.port 8501 --server.address 0.0.0.0</code></pre>
       Prototype • All data synthetic • Not a substitute for SARA / ILM workflows.
     </div>
   </div>
+  <script>
+    const deployedStreamlitUrl = '__PORT_8501__'.startsWith('__') ? 'http://localhost:8501' : '__PORT_8501__';
+    const launchLink = document.getElementById('launch-link');
+    const localLink = document.getElementById('local-link');
+    launchLink.href = deployedStreamlitUrl;
+    localLink.href = deployedStreamlitUrl;
+    if (!deployedStreamlitUrl.includes('localhost')) {
+      localLink.textContent = 'the private Streamlit app URL';
+    }
+  </script>
 </body>
 </html>

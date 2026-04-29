@@ -11,7 +11,7 @@ All data is synthetic. No SAP connection is required.
 from __future__ import annotations
 
 import io
-from datetime import datetime
+from datetime import UTC, datetime
 
 import numpy as np
 import pandas as pd
@@ -185,7 +185,7 @@ with st.sidebar:
     seed = st.number_input("Random seed", value=42, step=1, min_value=0, max_value=9999)
     n_per_object = st.slider("Records per object", 100, 800, 350, step=50)
 
-    if st.button("🔄 Regenerate dataset", use_container_width=True):
+    if st.button("🔄 Regenerate dataset", width="stretch"):
         st.cache_data.clear()
 
     st.markdown("---")
@@ -346,7 +346,7 @@ with col1:
         )
         fig.update_xaxes(showgrid=False)
         fig.update_yaxes(gridcolor="#eef2f5")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
     else:
         pivot = by_obj.pivot(index="archiving_object", columns="recommendation", values="count").fillna(0)
         st.bar_chart(pivot)
@@ -372,7 +372,7 @@ with col2:
             showlegend=True,
         )
         fig.update_traces(textposition="outside", textinfo="label+percent")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
     else:
         st.bar_chart(mix.set_index("recommendation"))
     st.markdown("</div>", unsafe_allow_html=True)
@@ -407,7 +407,7 @@ with col3:
         )
         fig.update_xaxes(gridcolor="#eef2f5")
         fig.update_yaxes(gridcolor="#eef2f5", range=[0, 105])
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
     else:
         if len(sample):
             st.scatter_chart(sample, x="age_days", y="archivability_score", size="size_mb")
@@ -444,7 +444,7 @@ with col4:
         )
         fig.update_xaxes(gridcolor="#eef2f5")
         fig.update_yaxes(showgrid=False)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
     elif len(storage):
         st.bar_chart(storage.set_index("archiving_object"))
     else:
@@ -498,7 +498,7 @@ if len(obj_summary):
                 "inconsistencies": "Inconsist.",
             }
         ),
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
 else:
@@ -547,7 +547,7 @@ st.dataframe(
             "rationale": "Rationale",
         }
     ),
-    use_container_width=True,
+    width="stretch",
     hide_index=True,
     column_config={
         "Workflow %": st.column_config.ProgressColumn(format="%.2f", min_value=0, max_value=1),
@@ -610,7 +610,7 @@ if ids_avail:
                 "Contribution": RULE_WEIGHTS[key] if passed else 0,
             }
         )
-    st.dataframe(pd.DataFrame(rule_rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(rule_rows), width="stretch", hide_index=True)
 
     flag_bits = []
     if rec["legal_hold"]:
@@ -631,7 +631,7 @@ st.markdown("</div>", unsafe_allow_html=True)
 # ---------- Export ----------
 st.markdown('<div class="section"><h2>Export</h2>', unsafe_allow_html=True)
 
-ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
 csv_buf = io.StringIO()
 fdf.to_csv(csv_buf, index=False)
 
@@ -648,7 +648,7 @@ with ec1:
         data=csv_buf.getvalue(),
         file_name=f"sap_archiving_records_{ts}.csv",
         mime="text/csv",
-        use_container_width=True,
+        width="stretch",
     )
 with ec2:
     st.download_button(
@@ -656,7 +656,7 @@ with ec2:
         data=md_report,
         file_name=f"sap_archiving_report_{ts}.md",
         mime="text/markdown",
-        use_container_width=True,
+        width="stretch",
     )
 with ec3:
     archive_only = fdf[fdf["recommendation"] == "ARCHIVE"]
@@ -667,7 +667,7 @@ with ec3:
         data=arch_csv.getvalue(),
         file_name=f"sap_archive_worklist_{ts}.csv",
         mime="text/csv",
-        use_container_width=True,
+        width="stretch",
     )
 st.markdown("</div>", unsafe_allow_html=True)
 
