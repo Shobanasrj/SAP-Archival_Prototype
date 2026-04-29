@@ -320,7 +320,7 @@ function renderKpis() {
     ['Archive-ready', archive.length.toLocaleString(), `${fmtMb(archiveSize)} candidate footprint`],
     ['Avg. score', avg.toFixed(1), '0-100 archivability index'],
     ['Cleanup blockers', remediate.length.toLocaleString(), 'Remediate or deduplicate first'],
-    ['Duplicate clusters', dup.toLocaleString(), 'Candidates to consolidate before archive'],
+    ['Deduplicate records', dup.toLocaleString(), 'Matches the DEDUPLICATE action bucket'],
   ];
   document.getElementById('kpis').innerHTML = kpis.map(k => `<div class="panel kpi"><div class="label">${k[0]}</div><div class="value">${k[1]}</div><div class="sub">${k[2]}</div></div>`).join('');
 }
