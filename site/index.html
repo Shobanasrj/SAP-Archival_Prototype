@@ -98,7 +98,7 @@
       <h1>SAP Archiving Assistant</h1>
       <p>AI-assisted archivability analysis across simulated SAP ECC business objects. Scan for duplicates, inconsistent records, stale workflows, and archive-ready candidates with transparent rules plus lightweight anomaly scoring.</p>
       <div class="badges">
-        <span class="badge">FI_DOCUMNT</span><span class="badge">MM_EKKO</span><span class="badge">SD_VBAK</span><span class="badge">MM_MATBEL</span><span class="badge">CO_ITEM</span><span class="badge">PP_ORDER</span><span class="badge">BC_SBAL</span>
+        <span class="badge">FI_DOCUMENT</span><span class="badge">MM_EKKO</span><span class="badge">SD_VBAK</span><span class="badge">MM_MATBEL</span><span class="badge">CO_ITEM</span><span class="badge">PP_ORDER</span><span class="badge">BC_SBAL</span>
       </div>
     </div>
     <div class="hero-actions">
@@ -181,7 +181,7 @@
 <script>
 const TODAY = new Date('2026-04-28T12:00:00-07:00');
 const OBJECTS = [
-  { table:'FI_DOCUMNT', label:'FI accounting documents', residence:2555, statuses:['CLEARED','POSTED','OPEN','REVERSED'], closed:['CLEARED','POSTED'], baseSize:18 },
+  { table:'FI_DOCUMENT', label:'FI accounting documents', residence:2555, statuses:['CLEARED','POSTED','OPEN','REVERSED'], closed:['CLEARED','POSTED'], baseSize:18 },
   { table:'MM_EKKO', label:'MM purchase orders', residence:1825, statuses:['CLOSED','DELIVERED','OPEN','BLOCKED'], closed:['CLOSED','DELIVERED'], baseSize:11 },
   { table:'SD_VBAK', label:'SD sales orders', residence:2190, statuses:['COMPLETED','BILLED','OPEN','CREDIT_BLOCK'], closed:['COMPLETED','BILLED'], baseSize:14 },
   { table:'MM_MATBEL', label:'Material documents', residence:2555, statuses:['POSTED','CANCELLED','OPEN'], closed:['POSTED'], baseSize:9 },
@@ -320,7 +320,7 @@ function renderKpis() {
     ['Archive-ready', archive.length.toLocaleString(), `${fmtMb(archiveSize)} candidate footprint`],
     ['Avg. score', avg.toFixed(1), '0-100 archivability index'],
     ['Cleanup blockers', remediate.length.toLocaleString(), 'Remediate or deduplicate first'],
-    ['Workflow gaps', wf.toLocaleString(), `${dup} duplicate clusters tracked separately`],
+    ['Duplicate clusters', dup.toLocaleString(), 'Candidates to consolidate before archive'],
   ];
   document.getElementById('kpis').innerHTML = kpis.map(k => `<div class="panel kpi"><div class="label">${k[0]}</div><div class="value">${k[1]}</div><div class="sub">${k[2]}</div></div>`).join('');
 }
