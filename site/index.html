@@ -30,14 +30,14 @@
     .hero {
       background: linear-gradient(135deg, #06333d, #007c89 58%, #18a9ba);
       color: white; border-radius: 24px; padding: 28px; box-shadow: var(--shadow);
-      display: grid; grid-template-columns: 1.45fr .8fr; gap: 24px; align-items: end;
+      display: grid; grid-template-columns: 1fr auto; gap: 24px; align-items: end;
     }
     .eyebrow { font-size: 12px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; opacity: .86; }
     h1 { margin: 12px 0 10px; font-size: clamp(30px, 4vw, 48px); line-height: 1.04; letter-spacing: -0.04em; }
-    .hero p { margin: 0; max-width: 820px; color: rgba(255,255,255,.9); font-size: 17px; line-height: 1.5; }
+    .hero p { margin: 0; max-width: 760px; color: rgba(255,255,255,.9); font-size: 17px; line-height: 1.5; }
     .badges { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 18px; }
     .badge { border: 1px solid rgba(255,255,255,.24); background: rgba(255,255,255,.14); border-radius: 999px; padding: 7px 10px; font-size: 12px; font-weight: 700; }
-    .hero-actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+    .hero-actions { display: grid; gap: 10px; justify-items: stretch; min-width: 220px; }
     button, .button {
       border: 1px solid var(--line); background: var(--surface); color: var(--ink);
       border-radius: 12px; padding: 10px 14px; font-weight: 750; cursor: pointer;
@@ -86,7 +86,7 @@
     .rule { display: flex; justify-content: space-between; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); }
     .report { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.55; background: #0c1c23; color: #e9f5f7; border-radius: 14px; padding: 16px; max-height: 440px; overflow: auto; }
     .empty { color: var(--muted); padding: 18px; text-align: center; }
-    @media (max-width: 1100px) { .layout, .hero, .grid-2, .grid-3, .drill { grid-template-columns: 1fr; } .filters { position: static; } .kpis { grid-template-columns: repeat(2, 1fr); } .hero-actions { justify-content: flex-start; } }
+    @media (max-width: 1100px) { .layout, .hero, .grid-2, .grid-3, .drill { grid-template-columns: 1fr; } .filters { position: static; } .kpis { grid-template-columns: repeat(2, 1fr); } .hero-actions { justify-items: start; min-width: 0; } }
     @media (max-width: 640px) { .app { padding: 14px; } .kpis { grid-template-columns: 1fr; } .hero { padding: 20px; } }
   </style>
 </head>
@@ -128,11 +128,6 @@
       </div>
       <label for="search">Search record</label>
       <input id="search" type="search" placeholder="Object ID, table, company code..." />
-      <div style="display:grid; gap:10px; margin-top:18px;">
-        <button id="download-csv">Download filtered CSV</button>
-        <button id="download-worklist">Download archive worklist</button>
-        <button id="download-report">Download Markdown report</button>
-      </div>
     </aside>
 
     <section class="content">
@@ -151,7 +146,14 @@
       <section class="panel card">
         <div class="card-head">
           <div><h2>Priority cleanup and archive worklist</h2><div class="hint">Sorted by priority score combining archivability, storage, anomaly risk, and cleanup blockers.</div></div>
-          <div class="hint" id="row-count"></div>
+          <div style="display:grid; gap:8px; justify-items:end;">
+            <div class="hint" id="row-count"></div>
+            <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;">
+              <button id="download-csv">Download filtered CSV</button>
+              <button id="download-worklist">Download archive worklist</button>
+              <button id="download-report">Download report</button>
+            </div>
+          </div>
         </div>
         <div class="table-wrap"><table id="worklist"></table></div>
       </section>
