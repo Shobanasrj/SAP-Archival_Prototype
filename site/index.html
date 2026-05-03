@@ -57,6 +57,10 @@
     .checklist { display: grid; gap: 7px; margin-top: 6px; }
     .check { display: flex; align-items: center; gap: 8px; color: var(--ink); font-size: 13px; }
     .content { display: grid; gap: 18px; }
+    .tabs { display: flex; gap: 8px; flex-wrap: wrap; border-bottom: 1px solid var(--line); padding: 0 0 10px; margin-bottom: 4px; }
+    .tab-btn { background: transparent; border: 0; border-radius: 10px 10px 0 0; color: var(--muted); padding: 10px 12px; box-shadow: none; }
+    .tab-btn:hover { box-shadow: none; background: #eef6f8; transform: none; }
+    .tab-btn.active { color: var(--teal); background: #e7f5f7; border-bottom: 3px solid var(--teal); }
     .kpis { display: grid; grid-template-columns: repeat(5, minmax(140px, 1fr)); gap: 14px; }
     .kpi { padding: 17px; }
     .kpi .label { color: var(--muted); font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; margin: 0 0 8px; }
@@ -85,8 +89,9 @@
     .rule-list { display: grid; gap: 8px; }
     .rule { display: flex; justify-content: space-between; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); }
     .report { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.55; background: #0c1c23; color: #e9f5f7; border-radius: 14px; padding: 16px; max-height: 440px; overflow: auto; }
+    .mini-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
     .empty { color: var(--muted); padding: 18px; text-align: center; }
-    @media (max-width: 1100px) { .layout, .hero, .grid-2, .grid-3, .drill { grid-template-columns: 1fr; } .filters { position: static; } .kpis { grid-template-columns: repeat(2, 1fr); } .hero-actions { justify-items: start; min-width: 0; } }
+    @media (max-width: 1100px) { .layout, .hero, .grid-2, .grid-3, .drill, .mini-grid { grid-template-columns: 1fr; } .filters { position: static; } .kpis { grid-template-columns: repeat(2, 1fr); } .hero-actions { justify-items: start; min-width: 0; } }
     @media (max-width: 640px) { .app { padding: 14px; } .kpis { grid-template-columns: 1fr; } .hero { padding: 20px; } }
   </style>
 </head>
@@ -131,51 +136,8 @@
     </aside>
 
     <section class="content">
-      <section class="kpis" id="kpis"></section>
-
-      <section class="grid-2">
-        <div class="panel card"><div class="card-head"><div><h2>Recommendation mix</h2><div class="hint">Records bucketed by highest-value next action.</div></div></div><div id="chart-reco" class="chart"></div></div>
-        <div class="panel card"><div class="card-head"><div><h2>Archivability by object</h2><div class="hint">Average score by SAP object family.</div></div></div><div id="chart-object" class="chart"></div></div>
-      </section>
-
-      <section class="grid-2">
-        <div class="panel card"><div class="card-head"><div><h2>Age vs. score</h2><div class="hint">Bubble size reflects estimated storage footprint.</div></div></div><div id="chart-scatter" class="chart"></div></div>
-        <div class="panel card"><div class="card-head"><div><h2>Risk and quality findings</h2><div class="hint">Detected candidates for cleanup before archive runs.</div></div></div><div id="chart-findings" class="chart"></div></div>
-      </section>
-
-      <section class="panel card">
-        <div class="card-head">
-          <div><h2>Priority cleanup and archive worklist</h2><div class="hint">Sorted by priority score combining archivability, storage, anomaly risk, and cleanup blockers.</div></div>
-          <div style="display:grid; gap:8px; justify-items:end;">
-            <div class="hint" id="row-count"></div>
-            <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;">
-              <button id="download-csv">Download filtered CSV</button>
-              <button id="download-worklist">Download archive worklist</button>
-              <button id="download-report">Download report</button>
-            </div>
-          </div>
-        </div>
-        <div class="table-wrap"><table id="worklist"></table></div>
-      </section>
-
-      <section class="panel card drill">
-        <div>
-          <h2>Object drilldown</h2>
-          <div class="hint">Select a high-priority record to see rules and blockers.</div>
-          <label for="drill-select">Record</label>
-          <select id="drill-select"></select>
-          <div id="drill-summary" style="margin-top:14px;"></div>
-        </div>
-        <div>
-          <h2>Rule explanation</h2>
-          <div id="rule-list" class="rule-list"></div>
-        </div>
-      </section>
-
-      <section class="grid-2">
-        <div class="panel card"><h2>Executive recommendation report</h2><div class="hint">Generated from the current filtered scan.</div><div id="report" class="report"></div></div>
-        <div class="panel card"><h2>Prototype notes</h2><p class="hint">This is a demo assistant, not a production SAP ILM connector. In production, these scans would map rules to ADK archive objects, ILM residence/retention policies, workflow tables, document flow dependencies, legal hold systems, and SAP Readiness Check or custom data aging analytics.</p><div class="grid-3" style="margin-top:14px;"><div><h3>Scan</h3><div class="hint">Duplicate clusters, inconsistent statuses, incomplete workflows.</div></div><div><h3>Score</h3><div class="hint">Residence, status, activity, legal hold, dependencies, quality.</div></div><div><h3>Recommend</h3><div class="hint">Archive, review, remediate, deduplicate, or retain.</div></div></div></div>
-      </section>
+      <nav class="tabs" id="tabs"></nav>
+      <div id="tab-root"></div>
     </section>
   </main>
 </div>
@@ -204,6 +166,8 @@ const RULES = [
 ];
 let data = [];
 let filtered = [];
+let activeTab = 'Executive Cockpit';
+const TAB_NAMES = ['Executive Cockpit','Scan Results','Cleanup Backlog','Archive Planner','Deletion Rules','Object Drilldown','What-if Rules','Exports'];
 
 function mulberry32(a){ return function(){ let t = a += 0x6D2B79F5; t = Math.imul(t ^ t >>> 15, t | 1); t ^= t + Math.imul(t ^ t >>> 7, t | 61); return ((t ^ t >>> 14) >>> 0) / 4294967296; } }
 function choice(rng, arr){ return arr[Math.floor(rng()*arr.length)] }
@@ -308,6 +272,25 @@ function countBy(rows, key){ const m={}; for(const r of rows) m[r[key]]=(m[r[key
 function sumBy(rows, key, val){ const m={}; for(const r of rows) m[r[key]]=(m[r[key]]||0)+r[val]; return m; }
 function avgBy(rows, key, val){ const sums={}, counts={}; for(const r of rows){ sums[r[key]]=(sums[r[key]]||0)+r[val]; counts[r[key]]=(counts[r[key]]||0)+1; } return Object.fromEntries(Object.keys(sums).map(k=>[k, sums[k]/counts[k]])); }
 function fmtMb(mb){ return mb>=1024 ? `${(mb/1024).toFixed(1)} GB` : `${Math.round(mb)} MB`; }
+function tabButtonHtml(name){ return `<button class="tab-btn ${activeTab===name?'active':''}" data-tab="${name}">${name}</button>`; }
+function actionButtonsHtml(){ return `<div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;"><button id="download-csv">Download filtered CSV</button><button id="download-worklist">Download archive worklist</button><button id="download-report">Download report</button><button id="download-delete">Download deletion rules</button></div>`; }
+function deletionReadyRows(){ return filtered.map(r => {
+  const surplus = Math.round((r.age_days - r.residence_days_required) / 30);
+  const ready = r.recommendation === 'ARCHIVE' && surplus >= 12 && !r.legal_hold && !r.open_dependencies && !r.duplicate_flag && !r.inconsistent_status && !r.missing_references && r.workflow_completion >= .98 && r.anomaly_score <= 35;
+  const archiveOnly = r.recommendation === 'ARCHIVE' && !ready;
+  return {...r, surplus_months: surplus, deletion_readiness: ready ? 'DELETE_AFTER_ARCHIVE_VALIDATION' : archiveOnly ? 'ARCHIVE_ONLY_RETAIN_COPY' : r.recommendation === 'REVIEW' ? 'REVIEW_BEFORE_DELETE' : 'NOT_DELETE_ELIGIBLE'};
+});}
+function packageRows(){
+  const rows = filtered.filter(r=>r.recommendation==='ARCHIVE').sort((a,b)=>a.table.localeCompare(b.table)||b.priority_score-a.priority_score);
+  let current='', wave=1, size=0, count=0;
+  return rows.map(r => {
+    const gb = r.size_mb/1024;
+    if (r.table !== current) { current = r.table; wave = 1; size = 0; count = 0; }
+    if (size + gb > 2.5 || count >= 250) { wave++; size = 0; count = 0; }
+    size += gb; count++;
+    return {...r, package_id: `${r.table}-W${String(wave).padStart(2,'0')}`};
+  });
+}
 
 function renderKpis() {
   const archive = filtered.filter(r=>r.recommendation==='ARCHIVE');
@@ -325,6 +308,45 @@ function renderKpis() {
     ['Deduplicate records', dup.toLocaleString(), 'Matches the DEDUPLICATE action bucket'],
   ];
   document.getElementById('kpis').innerHTML = kpis.map(k => `<div class="panel kpi"><div class="label">${k[0]}</div><div class="value">${k[1]}</div><div class="sub">${k[2]}</div></div>`).join('');
+}
+
+function renderTabs() {
+  document.getElementById('tabs').innerHTML = TAB_NAMES.map(tabButtonHtml).join('');
+  document.querySelectorAll('.tab-btn').forEach(btn => btn.addEventListener('click', () => { activeTab = btn.dataset.tab; render(); }));
+}
+
+function renderTabContent() {
+  const root = document.getElementById('tab-root');
+  const commonDownloads = actionButtonsHtml();
+  if (activeTab === 'Executive Cockpit') {
+    root.innerHTML = `<section class="kpis" id="kpis"></section>
+      <section class="grid-2">
+        <div class="panel card"><div class="card-head"><div><h2>Recommendation mix</h2><div class="hint">Records bucketed by highest-value next action.</div></div></div><div id="chart-reco" class="chart"></div></div>
+        <div class="panel card"><div class="card-head"><div><h2>Archivability by object</h2><div class="hint">Average score by SAP object family.</div></div></div><div id="chart-object" class="chart"></div></div>
+      </section>
+      <section class="grid-2">
+        <div class="panel card"><h2>Executive recommendation report</h2><div class="hint">Generated from the current filtered scan.</div><div id="report" class="report"></div></div>
+        <div class="panel card"><h2>Capgemini client view</h2><p class="hint">Use this cockpit to frame archive readiness, storage recovery, cleanup blockers, and business-value sequencing. This is the browser-safe tabbed version of the prototype.</p><div class="grid-3" style="margin-top:14px;"><div><h3>Discover</h3><div class="hint">Scan SAP-like objects.</div></div><div><h3>Clean</h3><div class="hint">Prioritize blockers.</div></div><div><h3>Archive</h3><div class="hint">Plan packages and purge gates.</div></div></div></div>
+      </section>`;
+  } else if (activeTab === 'Scan Results') {
+    root.innerHTML = `<section class="grid-2">
+        <div class="panel card"><div class="card-head"><div><h2>Age vs. score</h2><div class="hint">Bubble size reflects estimated storage footprint.</div></div></div><div id="chart-scatter" class="chart"></div></div>
+        <div class="panel card"><div class="card-head"><div><h2>Risk and quality findings</h2><div class="hint">Detected candidates for cleanup before archive runs.</div></div></div><div id="chart-findings" class="chart"></div></div>
+      </section><section class="panel card"><div class="card-head"><div><h2>Full scan results</h2><div class="hint">Filtered records sorted by priority.</div></div><div class="hint" id="row-count"></div></div><div class="table-wrap"><table id="worklist"></table></div></section>`;
+  } else if (activeTab === 'Cleanup Backlog') {
+    root.innerHTML = `<section class="panel card"><div class="card-head"><div><h2>Priority cleanup backlog</h2><div class="hint">Remediate legal holds, duplicates, inconsistent status, missing references, open dependencies, and incomplete workflows.</div></div><div class="hint" id="row-count"></div></div><div class="table-wrap"><table id="worklist"></table></div></section>
+    <section class="grid-3"><div class="panel card"><h3>Legal / compliance</h3><div class="hint">Confirm holds and retention owners before archive release.</div></div><div class="panel card"><h3>Data steward</h3><div class="hint">Resolve duplicate clusters and reference mismatches.</div></div><div class="panel card"><h3>Functional owner</h3><div class="hint">Close workflows and document-flow dependencies.</div></div></section>`;
+  } else if (activeTab === 'Archive Planner') {
+    root.innerHTML = `<section class="panel card"><div class="card-head"><div><h2>Archive run packages</h2><div class="hint">ARCHIVE candidates grouped into synthetic archive waves by object family, priority, and footprint.</div></div></div><div class="table-wrap"><table id="package-table"></table></div></section>`;
+  } else if (activeTab === 'Deletion Rules') {
+    root.innerHTML = `<section class="panel card"><h2>Deletion / purge readiness rules</h2><div class="hint">Client-safe rule: delete only after archive write/read validation, retention approval, legal/compliance confirmation, and no open dependencies.</div><div class="mini-grid" id="delete-kpis" style="margin-top:14px;"></div></section><section class="panel card"><h2>Deletion readiness worklist</h2><div class="table-wrap"><table id="delete-table"></table></div></section>`;
+  } else if (activeTab === 'Object Drilldown') {
+    root.innerHTML = `<section class="panel card drill"><div><h2>Object drilldown</h2><div class="hint">Select a high-priority record to see rules and blockers.</div><label for="drill-select">Record</label><select id="drill-select"></select><div id="drill-summary" style="margin-top:14px;"></div></div><div><h2>Rule explanation</h2><div id="rule-list" class="rule-list"></div></div></section>`;
+  } else if (activeTab === 'What-if Rules') {
+    root.innerHTML = `<section class="panel card"><h2>What-if rules</h2><div class="hint">Adjust residence time in the left panel and use filters to simulate stricter archive policies. The direct browser version recalculates scores instantly.</div><section class="kpis" id="kpis" style="margin-top:14px;"></section></section><section class="grid-2"><div class="panel card"><h2>Scenario: recommendation mix</h2><div id="chart-reco" class="chart"></div></div><div class="panel card"><h2>Scenario: object readiness</h2><div id="chart-object" class="chart"></div></div></section>`;
+  } else {
+    root.innerHTML = `<section class="panel card"><div class="card-head"><div><h2>Exports and client handoff</h2><div class="hint">Download current filtered outputs.</div></div>${commonDownloads}</div><div id="report" class="report"></div></section>`;
+  }
 }
 
 function renderCharts() {
@@ -347,8 +369,9 @@ function renderCharts() {
 }
 
 function renderTable() {
+  if (!document.getElementById('worklist')) return;
   const rows = [...filtered].sort((a,b)=>b.priority_score-a.priority_score).slice(0,80);
-  document.getElementById('row-count').textContent = `${filtered.length.toLocaleString()} records after filters`;
+  if (document.getElementById('row-count')) document.getElementById('row-count').textContent = `${filtered.length.toLocaleString()} records after filters`;
   if (!rows.length) { document.getElementById('worklist').innerHTML = `<tbody><tr><td class="empty">No records match the current filters.</td></tr></tbody>`; return; }
   const heads = ['Recommendation','Object ID','Table','Status','Score','Age','Size','Findings','Priority'];
   document.getElementById('worklist').innerHTML = `<thead><tr>${heads.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>` + rows.map(r => {
@@ -358,6 +381,7 @@ function renderTable() {
 }
 
 function renderDrilldown() {
+  if (!document.getElementById('drill-select')) return;
   const select = document.getElementById('drill-select');
   const rows = [...filtered].sort((a,b)=>b.priority_score-a.priority_score).slice(0,60);
   const current = select.value;
@@ -374,6 +398,27 @@ function renderDrilldown() {
       </tbody></table>
     </div>`;
   document.getElementById('rule-list').innerHTML = RULES.map(([key,label,weight]) => `<div class="rule"><span>${label}<br><small class="hint">Weight ${weight}</small></span><span class="${r[key]?'pass':'fail'}">${r[key]?'PASS':'FAIL'}</span></div>`).join('');
+}
+
+function renderPackages() {
+  const el = document.getElementById('package-table');
+  if (!el) return;
+  const rows = packageRows();
+  const byPkg = {};
+  rows.forEach(r => { if(!byPkg[r.package_id]) byPkg[r.package_id]={package_id:r.package_id, table:r.table, records:0, size:0, avg:0}; byPkg[r.package_id].records++; byPkg[r.package_id].size += r.size_mb; byPkg[r.package_id].avg += r.archivability_score; });
+  const pkgs = Object.values(byPkg).map(p => ({...p, avg: p.avg/p.records})).slice(0,80);
+  if (!pkgs.length) { el.innerHTML = `<tbody><tr><td class="empty">No ARCHIVE candidates available for package planning.</td></tr></tbody>`; return; }
+  el.innerHTML = `<thead><tr><th>Package</th><th>Object</th><th>Records</th><th>Size</th><th>Avg score</th><th>Est. runtime</th></tr></thead><tbody>` + pkgs.map(p => `<tr><td>${p.package_id}</td><td>${p.table}</td><td>${p.records}</td><td>${fmtMb(p.size)}</td><td>${p.avg.toFixed(1)}</td><td>${Math.max(5, Math.round(p.records*.018 + (p.size/1024)*5))} min</td></tr>`).join('') + `</tbody>`;
+}
+
+function renderDeletionRules() {
+  const table = document.getElementById('delete-table');
+  if (!table) return;
+  const rows = deletionReadyRows();
+  const counts = countBy(rows, 'deletion_readiness');
+  const kpi = document.getElementById('delete-kpis');
+  if (kpi) kpi.innerHTML = ['DELETE_AFTER_ARCHIVE_VALIDATION','ARCHIVE_ONLY_RETAIN_COPY','REVIEW_BEFORE_DELETE','NOT_DELETE_ELIGIBLE'].map(k => `<div class="panel kpi"><div class="label">${k.replaceAll('_',' ')}</div><div class="value">${(counts[k]||0).toLocaleString()}</div><div class="sub">${k==='DELETE_AFTER_ARCHIVE_VALIDATION'?'Purge only after validation':'Controlled disposition'}</div></div>`).join('');
+  table.innerHTML = `<thead><tr><th>Readiness</th><th>Object ID</th><th>Table</th><th>Status</th><th>Surplus mo</th><th>Score</th><th>Size</th><th>Rationale</th></tr></thead><tbody>` + rows.sort((a,b)=>a.deletion_readiness.localeCompare(b.deletion_readiness)||b.surplus_months-a.surplus_months).slice(0,120).map(r => `<tr><td>${r.deletion_readiness}</td><td>${r.object_id}</td><td>${r.table}</td><td>${r.status}</td><td>${r.surplus_months}</td><td>${r.archivability_score}</td><td>${fmtMb(r.size_mb)}</td><td>${r.deletion_readiness==='DELETE_AFTER_ARCHIVE_VALIDATION'?'Passed strict gates; delete only after archive validation and approval.':'Not purge-ready under strict retention/quality/dependency gates.'}</td></tr>`).join('') + `</tbody>`;
 }
 
 function buildReport() {
@@ -416,8 +461,19 @@ ${top.map((r,i)=>`${i+1}. ${r.object_id} (${r.table}) — ${r.recommendation}, s
 `;
 }
 
-function renderReport() { document.getElementById('report').textContent = buildReport(); }
-function render() { renderKpis(); renderCharts(); renderTable(); renderDrilldown(); renderReport(); }
+function renderReport() { if (document.getElementById('report')) document.getElementById('report').textContent = buildReport(); }
+function render() {
+  renderTabs();
+  renderTabContent();
+  if (document.getElementById('kpis')) renderKpis();
+  if (document.getElementById('chart-reco')) renderCharts();
+  renderTable();
+  renderPackages();
+  renderDeletionRules();
+  renderDrilldown();
+  renderReport();
+  wireDownloads();
+}
 
 function initControls() {
   const objSelect = document.getElementById('object-filter');
@@ -430,12 +486,21 @@ function initControls() {
     computeScores(data, +document.getElementById('residence-adjust').value);
     applyFilters();
   }));
-  document.getElementById('drill-select').addEventListener('input', renderDrilldown);
   document.getElementById('btn-regenerate').addEventListener('click', () => { data = generateData(Math.floor(Math.random()*1000000)); applyFilters(); });
-  document.getElementById('download-csv').addEventListener('click', () => download('sap_archiving_filtered_records.csv', toCsv(filtered), 'text/csv'));
-  document.getElementById('download-worklist').addEventListener('click', () => download('sap_archiving_archive_worklist.csv', toCsv(filtered.filter(r=>r.recommendation==='ARCHIVE')), 'text/csv'));
-  document.getElementById('download-report').addEventListener('click', () => download('sap_archiving_recommendation_report.md', buildReport(), 'text/markdown'));
   document.getElementById('btn-report-top').addEventListener('click', () => download('sap_archiving_recommendation_report.md', buildReport(), 'text/markdown'));
+}
+
+function wireDownloads(){
+  const csv = document.getElementById('download-csv');
+  const worklist = document.getElementById('download-worklist');
+  const report = document.getElementById('download-report');
+  const del = document.getElementById('download-delete');
+  if (csv) csv.onclick = () => download('sap_archiving_filtered_records.csv', toCsv(filtered), 'text/csv');
+  if (worklist) worklist.onclick = () => download('sap_archiving_archive_worklist.csv', toCsv(filtered.filter(r=>r.recommendation==='ARCHIVE')), 'text/csv');
+  if (report) report.onclick = () => download('sap_archiving_recommendation_report.md', buildReport(), 'text/markdown');
+  if (del) del.onclick = () => download('sap_archiving_deletion_readiness.csv', toCsv(deletionReadyRows()), 'text/csv');
+  const drill = document.getElementById('drill-select');
+  if (drill) drill.oninput = renderDrilldown;
 }
 
 initControls();

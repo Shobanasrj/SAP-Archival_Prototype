@@ -72,8 +72,16 @@ CUSTOM_CSS = f"""
   }}
   [data-testid="stAppViewContainer"] {{ background: {BG}; }}
   [data-testid="stHeader"] {{ background: transparent; }}
+  .block-container {{
+    padding-top: 1.35rem !important;
+    padding-bottom: 1.5rem !important;
+    max-width: 1420px;
+  }}
   [data-testid="stSidebar"] {{
     background: linear-gradient(180deg, {PRIMARY_DARK} 0%, #04303f 100%);
+  }}
+  [data-testid="stSidebar"] > div:first-child {{
+    padding-top: 1.35rem;
   }}
   [data-testid="stSidebar"] * {{ color: #e8f1f5 !important; }}
   [data-testid="stSidebar"] input, [data-testid="stSidebar"] textarea {{
@@ -82,17 +90,79 @@ CUSTOM_CSS = f"""
   [data-testid="stSidebar"] [role="option"], [data-testid="stSidebar"] [data-baseweb="select"] * {{
     color: {INK} !important;
   }}
+  [data-testid="stSidebar"] [data-baseweb="tag"] {{
+    background: #12a7c8 !important;
+  }}
+  [data-testid="stSidebar"] .stButton > button {{
+    width: 100%;
+    min-height: 46px;
+    background: linear-gradient(90deg, #12a7c8, #0a7c97);
+    border-radius: 12px;
+    color: white;
+    box-shadow: 0 10px 24px rgba(0,0,0,0.18);
+  }}
+  .sidebar-brand {{
+    border: 1px solid rgba(255,255,255,.16);
+    background: rgba(255,255,255,.08);
+    border-radius: 18px;
+    padding: 16px 14px;
+    margin-bottom: 16px;
+  }}
+  .cap-logo {{
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 20px;
+    font-weight: 850;
+    letter-spacing: -0.03em;
+  }}
+  .cap-mark {{
+    width: 34px;
+    height: 34px;
+    border-radius: 11px 11px 18px 11px;
+    display: inline-grid;
+    place-items: center;
+    background: linear-gradient(135deg, #12a7c8, #7de3f5);
+    color: #04303f;
+    font-weight: 900;
+    font-size: 18px;
+  }}
+  .side-caption {{
+    margin-top: 8px;
+    color: rgba(232,241,245,.76) !important;
+    font-size: 12px;
+    line-height: 1.4;
+  }}
+  .side-card {{
+    background: rgba(255,255,255,.08);
+    border: 1px solid rgba(255,255,255,.14);
+    border-radius: 15px;
+    padding: 13px 13px 5px;
+    margin: 12px 0;
+  }}
+  .side-card-title {{
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .12em;
+    font-weight: 850;
+    color: rgba(232,241,245,.72) !important;
+    margin-bottom: 8px;
+  }}
   .brand-bar {{
     background: linear-gradient(90deg, {PRIMARY_DARK} 0%, {PRIMARY} 64%, {ACCENT} 100%);
     color: #fff;
-    padding: 22px 28px;
-    border-radius: 14px;
+    padding: 18px 24px;
+    border-radius: 18px;
     margin-bottom: 14px;
     box-shadow: 0 8px 24px rgba(6,63,81,0.12);
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 18px;
+    align-items: center;
   }}
   .brand-bar h1 {{
     margin: 0;
-    font-size: 28px;
+    font-size: 30px;
     font-weight: 800;
     letter-spacing: -0.02em;
   }}
@@ -102,6 +172,48 @@ CUSTOM_CSS = f"""
     font-size: 14px;
     max-width: 980px;
     line-height: 1.55;
+  }}
+  .top-logo {{
+    text-align: right;
+    min-width: 210px;
+  }}
+  .capgemini-word {{
+    font-size: 24px;
+    font-weight: 850;
+    letter-spacing: -0.04em;
+  }}
+  .capgemini-note {{
+    margin-top: 4px;
+    font-size: 11px;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    opacity: .78;
+  }}
+  .status-strip {{
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+    margin: 0 0 14px 0;
+  }}
+  .status-tile {{
+    background: white;
+    border: 1px solid #e1e8ee;
+    border-radius: 14px;
+    padding: 10px 14px;
+    box-shadow: 0 1px 2px rgba(14,28,38,0.035);
+  }}
+  .status-label {{
+    color: {MUTED};
+    font-size: 10px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    font-weight: 850;
+  }}
+  .status-value {{
+    margin-top: 4px;
+    font-size: 15px;
+    font-weight: 800;
+    color: {INK};
   }}
   .badges {{
     margin-top: 12px;
@@ -209,6 +321,11 @@ CUSTOM_CSS = f"""
     text-align: center;
     padding: 16px 0 4px;
   }}
+  @media (max-width: 900px) {{
+    .brand-bar {{ grid-template-columns: 1fr; }}
+    .top-logo {{ text-align:left; min-width:0; }}
+    .status-strip {{ grid-template-columns: repeat(2, 1fr); }}
+  }}
 </style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
@@ -241,19 +358,19 @@ def fig_layout(fig, height: int = 340):
 
 
 def render_kpis(cards: list[dict]):
-    html = ['<div class="kpi-grid">']
-    for c in cards:
-        html.append(
-            f"""
-            <div class="kpi {c.get('style', 'accent')}">
-              <div class="label">{c['label']}</div>
-              <div class="value">{c['value']}</div>
-              <div class="delta">{c['delta']}</div>
-            </div>
-            """
-        )
-    html.append("</div><div style='height:14px'></div>")
-    st.markdown("".join(html), unsafe_allow_html=True)
+    """Render KPI cards using Streamlit-native metrics.
+
+    Avoid custom HTML here because Streamlit can occasionally render partial
+    HTML as raw text depending on local browser/markdown parsing behavior.
+    """
+    render_native_metrics(cards)
+
+
+def render_native_metrics(cards: list[dict]):
+    """Render compact KPI cards using Streamlit-native metrics for maximum reliability."""
+    cols = st.columns(len(cards))
+    for col, card in zip(cols, cards):
+        col.metric(card["label"], card["value"], card.get("delta", None))
 
 
 def recommendation_counts(frame: pd.DataFrame) -> pd.DataFrame:
@@ -371,6 +488,59 @@ def build_archive_packages(frame: pd.DataFrame, max_package_gb: float, max_recor
     return summary, candidates
 
 
+def add_deletion_readiness(frame: pd.DataFrame, retention_buffer_months: int = 12) -> pd.DataFrame:
+    """Classify records for deletion/purge after archive validation.
+
+    In SAP archiving, deletion is not the first action. Records should only be
+    considered purge-ready after archive write/read validation and after
+    retention, legal hold, dependency, and data-quality rules pass.
+    """
+    if frame.empty:
+        return frame.copy()
+
+    out = frame.copy()
+    surplus_residence = out["residence_months"] >= (
+        out["min_residence_months"] + retention_buffer_months
+    )
+    clean_gates = (
+        out["recommendation"].eq("ARCHIVE")
+        & surplus_residence
+        & ~out["legal_hold"]
+        & ~out["has_open_dependencies"]
+        & ~out["duplicate_flag"]
+        & ~out["inconsistency_flag"]
+        & (out["data_quality_score"] >= 0.85)
+        & (out["workflow_completion"] >= 0.98)
+        & (out["days_since_activity"] >= 540)
+        & (out["anomaly_score"] <= 0.35)
+    )
+    archive_only = out["recommendation"].eq("ARCHIVE") & ~clean_gates
+    blocked = out["recommendation"].isin(["RETAIN", "REMEDIATE", "DEDUPLICATE"])
+
+    out["deletion_readiness"] = np.select(
+        [clean_gates, archive_only, blocked],
+        [
+            "DELETE_AFTER_ARCHIVE_VALIDATION",
+            "ARCHIVE_ONLY_RETAIN_COPY",
+            "NOT_DELETE_ELIGIBLE",
+        ],
+        default="REVIEW_BEFORE_DELETE",
+    )
+    out["deletion_rationale"] = np.select(
+        [clean_gates, archive_only, blocked],
+        [
+            "Passed strict purge gates; delete only after archive write/read validation and approval.",
+            "Archive candidate, but not purge-ready under stricter retention/quality gates.",
+            "Blocked by retain/remediate/deduplicate recommendation.",
+        ],
+        default="Needs business/legal review before any deletion decision.",
+    )
+    out["residence_surplus_months"] = (
+        out["residence_months"] - out["min_residence_months"]
+    ).round(1)
+    return out
+
+
 def build_scenario(frame: pd.DataFrame, residence_buffer: int, workflow_threshold: float, dq_threshold: float, idle_months: int) -> pd.DataFrame:
     if frame.empty:
         return frame.copy()
@@ -428,7 +598,8 @@ def client_report(frame: pd.DataFrame, packages: pd.DataFrame, backlog: pd.DataF
         "2. **Clean blockers:** remediate duplicate, workflow, dependency, legal-hold, and status inconsistency items.",
         "3. **Pilot archive package:** run the highest-score, lowest-risk package first and verify retrieval/read-only access.",
         "4. **Scale waves:** schedule remaining packages by object family, storage impact, and business calendar constraints.",
-        "5. **Operationalize:** convert prototype rules into SAP ILM/ADK jobs, retention warehouse controls, and monitoring KPIs.",
+        "5. **Validate deletion rules:** only mark records for purge after archive write/read validation, retention approval, and legal/compliance review.",
+        "6. **Operationalize:** convert prototype rules into SAP ILM/ADK jobs, retention warehouse controls, and monitoring KPIs.",
     ]
     if len(packages):
         lines.extend(["", "### Top archive packages", "", "| Package | Object | Records | Size GB | Avg score | Runtime min |", "| --- | --- | ---: | ---: | ---: | ---: |"])
@@ -440,19 +611,26 @@ def client_report(frame: pd.DataFrame, packages: pd.DataFrame, backlog: pd.DataF
 
 
 with st.sidebar:
-    st.markdown("### SAP Archiving Assistant")
-    st.caption("Prototype • Synthetic data only")
-    st.markdown("#### Dataset")
+    st.markdown(
+        """
+        <div class="sidebar-brand">
+          <div class="cap-logo"><span class="cap-mark">⌁</span><span>Capgemini</span></div>
+          <div class="side-caption">SAP Archiving Assistant<br>AI-powered data retirement cockpit</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown('<div class="side-card"><div class="side-card-title">Dataset controls</div>', unsafe_allow_html=True)
     seed = st.number_input("Random seed", value=42, step=1, min_value=0, max_value=9999)
     n_per_object = st.slider("Records per object", 100, 800, 350, step=50)
     if st.button("Regenerate dataset", width="stretch"):
         st.cache_data.clear()
+    st.markdown("</div>", unsafe_allow_html=True)
 
 df = load_data(int(seed), int(n_per_object))
 
 with st.sidebar:
-    st.markdown("---")
-    st.markdown("#### Global filters")
+    st.markdown('<div class="side-card"><div class="side-card-title">Scope filters</div>', unsafe_allow_html=True)
     objects_avail = sorted(df["archiving_object"].unique().tolist())
     modules_avail = sorted(df["module"].unique().tolist())
     company_codes = sorted(df["company_code"].unique().tolist())
@@ -466,13 +644,23 @@ with st.sidebar:
     only_archivable = st.checkbox("Only show ARCHIVE candidates", value=False)
     exclude_legal_hold = st.checkbox("Exclude legal-hold records", value=True)
     search_text = st.text_input("Search object ID/table/status", value="")
+    st.markdown("</div>", unsafe_allow_html=True)
 
-    st.markdown("---")
+    st.markdown('<div class="side-card"><div class="side-card-title">Client context</div>', unsafe_allow_html=True)
     client_name = st.text_input("Client / program name", value="SAP Data Archiving Assessment")
     ml_label = "scikit-learn IsolationForest" if SKLEARN_AVAILABLE else "Heuristic fallback"
     chart_label = "Plotly" if PLOTLY_AVAILABLE else "Streamlit native"
-    st.caption(f"Anomaly engine: {ml_label}")
-    st.caption(f"Chart engine: {chart_label}")
+    st.markdown(
+        f"""
+        <div class="side-caption">
+          Anomaly engine: <b>{ml_label}</b><br>
+          Chart engine: <b>{chart_label}</b><br>
+          Mode: Client demo / synthetic data
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
 
 mask = (
     df["archiving_object"].isin(sel_objects)
@@ -505,6 +693,7 @@ issues = detect_data_issues(fdf) if len(fdf) else {
 }
 obj_summary = summary_by_object(fdf) if len(fdf) else pd.DataFrame()
 cleanup_backlog = build_cleanup_backlog(fdf)
+deletion_df = add_deletion_readiness(fdf)
 
 total = len(fdf)
 archive_n = int((fdf["recommendation"] == "ARCHIVE").sum()) if total else 0
@@ -518,15 +707,33 @@ pct_archivable = pct(archive_n, total)
 st.markdown(
     f"""
     <div class="brand-bar">
-      <h1>SAP Archiving Assistant</h1>
-      <p><b>{client_name}</b> — client-ready prototype for SAP archiving discovery, cleanup planning,
-      archive package sequencing, and policy what-if analysis.</p>
-      <div class="badges">
-        <span class="pill">Synthetic SAP ECC/S/4 data</span>
-        <span class="pill">Anomaly: {ml_label}</span>
-        <span class="pill">Charts: {chart_label}</span>
-        <span class="pill">{len(df):,} generated records</span>
+      <div>
+        <h1>SAP Archiving Assistant</h1>
+        <p><b>{client_name}</b> — AI-powered SAP data retirement cockpit for discovery, cleanup planning,
+        archive package sequencing, deletion readiness, and policy what-if analysis.</p>
+        <div class="badges">
+          <span class="pill">Synthetic SAP ECC/S/4 data</span>
+          <span class="pill">Anomaly: {ml_label}</span>
+          <span class="pill">Charts: {chart_label}</span>
+          <span class="pill">{len(df):,} generated records</span>
+        </div>
       </div>
+      <div class="top-logo">
+        <div class="capgemini-word">Capgemini</div>
+        <div class="capgemini-note">Insights & Data</div>
+      </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.markdown(
+    f"""
+    <div class="status-strip">
+      <div class="status-tile"><div class="status-label">Program lens</div><div class="status-value">Archive + ILM readiness</div></div>
+      <div class="status-tile"><div class="status-label">Filtered records</div><div class="status-value">{total:,}</div></div>
+      <div class="status-tile"><div class="status-label">Archive-ready</div><div class="status-value">{archive_n:,} records</div></div>
+      <div class="status-tile"><div class="status-label">Recoverable footprint</div><div class="status-value">{archive_size_gb:,} GB</div></div>
     </div>
     """,
     unsafe_allow_html=True,
@@ -538,6 +745,7 @@ tabs = st.tabs(
         "Scan Results",
         "Cleanup Backlog",
         "Archive Planner",
+        "Deletion Rules",
         "Object Drilldown",
         "What-if Rules",
         "Exports",
@@ -868,15 +1076,17 @@ with tabs[3]:
 
     package_summary, package_detail = build_archive_packages(fdf, max_package_gb, max_records)
     with pcol2:
-        render_kpis(
+        st.markdown('<div class="section"><h2>Archive package KPIs</h2>', unsafe_allow_html=True)
+        render_native_metrics(
             [
-                {"label": "Archive packages", "value": f"{len(package_summary):,}", "delta": "Generated from current ARCHIVE candidates", "style": "accent"},
-                {"label": "Packaged records", "value": f"{len(package_detail):,}", "delta": f"{gb(package_detail['size_mb']) if len(package_detail) else 0:,} GB", "style": "good"},
-                {"label": "Avg runtime", "value": f"{round(package_summary['estimated_runtime_min'].mean(), 0):.0f} min" if len(package_summary) else "0 min", "delta": "Rough synthetic estimate per package", "style": "warn"},
-                {"label": "Largest package", "value": f"{package_summary['size_gb'].max():.2f} GB" if len(package_summary) else "0 GB", "delta": "Bounded by package control", "style": "purple"},
-                {"label": "Recoverable", "value": f"{archive_size_gb:,} GB", "delta": "From current archive-ready set", "style": "good"},
+                {"label": "Archive packages", "value": f"{len(package_summary):,}", "delta": "Generated"},
+                {"label": "Packaged records", "value": f"{len(package_detail):,}", "delta": f"{gb(package_detail['size_mb']) if len(package_detail) else 0:,} GB"},
+                {"label": "Avg runtime", "value": f"{round(package_summary['estimated_runtime_min'].mean(), 0):.0f} min" if len(package_summary) else "0 min", "delta": "Estimate"},
+                {"label": "Largest package", "value": f"{package_summary['size_gb'].max():.2f} GB" if len(package_summary) else "0 GB", "delta": "Max"},
+                {"label": "Recoverable", "value": f"{archive_size_gb:,} GB", "delta": "Ready"},
             ]
         )
+        st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown('<div class="section"><h2>Archive run packages</h2>', unsafe_allow_html=True)
     if len(package_summary):
@@ -934,6 +1144,133 @@ with tabs[3]:
         st.markdown("</div>", unsafe_allow_html=True)
 
 with tabs[4]:
+    st.markdown('<div class="section"><h2>Deletion / purge readiness rules</h2>', unsafe_allow_html=True)
+    st.warning(
+        "Client-safe rule: deletion is only considered after successful archive write/read validation, retention approval, "
+        "and legal/compliance confirmation. This prototype labels deletion readiness; it does not delete anything."
+    )
+    retention_buffer = st.slider(
+        "Extra residence buffer before delete/purge eligibility (months)",
+        0,
+        60,
+        12,
+        step=6,
+    )
+    deletion_df = add_deletion_readiness(fdf, retention_buffer)
+    delete_ready = deletion_df[
+        deletion_df["deletion_readiness"].eq("DELETE_AFTER_ARCHIVE_VALIDATION")
+    ]
+    archive_only = deletion_df[
+        deletion_df["deletion_readiness"].eq("ARCHIVE_ONLY_RETAIN_COPY")
+    ]
+    not_eligible = deletion_df[
+        deletion_df["deletion_readiness"].eq("NOT_DELETE_ELIGIBLE")
+    ]
+    review_delete = deletion_df[
+        deletion_df["deletion_readiness"].eq("REVIEW_BEFORE_DELETE")
+    ]
+    render_native_metrics(
+        [
+            {"label": "Delete after validation", "value": f"{len(delete_ready):,}", "delta": f"{gb(delete_ready['size_mb']) if len(delete_ready) else 0:,} GB"},
+            {"label": "Archive only", "value": f"{len(archive_only):,}", "delta": "Retain archived copy"},
+            {"label": "Review before delete", "value": f"{len(review_delete):,}", "delta": "Business/legal review"},
+            {"label": "Not delete eligible", "value": f"{len(not_eligible):,}", "delta": "Blocked or not ready"},
+            {"label": "Buffer", "value": f"{retention_buffer} mo", "delta": "Beyond residence"},
+        ]
+    )
+
+    c1, c2 = st.columns([1, 1])
+    with c1:
+        st.markdown("**Deletion-readiness rule gates**")
+        gates = pd.DataFrame(
+            [
+                ("Archive recommendation", "Must already be ARCHIVE-ready"),
+                ("Extra residence buffer", f"Residence must exceed object minimum by {retention_buffer} months"),
+                ("Legal hold", "Must not be under legal hold"),
+                ("Dependencies", "Must have no open downstream dependencies"),
+                ("Data quality", "Data quality score must be ≥ 0.85"),
+                ("Workflow", "Workflow completion must be ≥ 98%"),
+                ("Activity", "No activity for at least 540 days"),
+                ("Anomaly risk", "Anomaly score must be ≤ 0.35"),
+                ("Validation", "Delete only after archive write/read validation and approval"),
+            ],
+            columns=["Gate", "Rule"],
+        )
+        st.dataframe(gates, width="stretch", hide_index=True)
+    with c2:
+        readiness = (
+            deletion_df["deletion_readiness"]
+            .value_counts()
+            .rename_axis("Readiness")
+            .reset_index(name="Records")
+        )
+        if PLOTLY_AVAILABLE and len(readiness):
+            fig = px.bar(
+                readiness,
+                x="Records",
+                y="Readiness",
+                orientation="h",
+                text="Records",
+                color="Readiness",
+                color_discrete_map={
+                    "DELETE_AFTER_ARCHIVE_VALIDATION": "#2f8a3e",
+                    "ARCHIVE_ONLY_RETAIN_COPY": PRIMARY,
+                    "REVIEW_BEFORE_DELETE": "#c97a17",
+                    "NOT_DELETE_ELIGIBLE": "#4a5c66",
+                },
+            )
+            fig.update_traces(textposition="outside")
+            fig_layout(fig, 360)
+            fig.update_xaxes(gridcolor="#eef2f5")
+            fig.update_yaxes(title="")
+            st.plotly_chart(fig, width="stretch")
+        else:
+            st.bar_chart(readiness.set_index("Readiness"))
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown('<div class="section"><h2>Deletion candidate worklist</h2>', unsafe_allow_html=True)
+    deletion_cols = [
+        "object_id",
+        "archiving_object",
+        "company_code",
+        "status",
+        "residence_months",
+        "min_residence_months",
+        "residence_surplus_months",
+        "workflow_completion",
+        "data_quality_score",
+        "anomaly_score",
+        "size_mb",
+        "deletion_readiness",
+        "deletion_rationale",
+    ]
+    st.dataframe(
+        deletion_df.sort_values(
+            ["deletion_readiness", "residence_surplus_months", "size_mb"],
+            ascending=[True, False, False],
+        )[deletion_cols].rename(
+            columns={
+                "object_id": "Object ID",
+                "archiving_object": "Archiving Object",
+                "company_code": "CoCd",
+                "status": "Status",
+                "residence_months": "Residence Mo",
+                "min_residence_months": "Min Residence",
+                "residence_surplus_months": "Surplus Mo",
+                "workflow_completion": "Workflow %",
+                "data_quality_score": "DQ Score",
+                "anomaly_score": "Anomaly",
+                "size_mb": "Size MB",
+                "deletion_readiness": "Deletion Readiness",
+                "deletion_rationale": "Rationale",
+            }
+        ),
+        width="stretch",
+        hide_index=True,
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+with tabs[5]:
     st.markdown('<div class="section"><h2>Object drilldown</h2>', unsafe_allow_html=True)
     ids_avail = (
         fdf.sort_values("priority_score", ascending=False)["object_id"].drop_duplicates().head(800).tolist()
@@ -1013,7 +1350,7 @@ with tabs[4]:
         st.info("No records to drill into.")
     st.markdown("</div>", unsafe_allow_html=True)
 
-with tabs[5]:
+with tabs[6]:
     st.markdown('<div class="section"><h2>What-if archivability rules</h2>', unsafe_allow_html=True)
     w1, w2, w3, w4 = st.columns(4)
     residence_buffer = w1.slider("Residence buffer months", -12, 24, 0, step=3)
@@ -1026,13 +1363,13 @@ with tabs[5]:
     delta_ready = scenario_ready - current_ready
     scenario_gb = gb(scenario.loc[scenario["scenario_archive_ready"], "size_mb"]) if len(scenario) else 0
 
-    render_kpis(
+    render_native_metrics(
         [
-            {"label": "Current archive-ready", "value": f"{current_ready:,}", "delta": "Based on baseline rules", "style": "accent"},
-            {"label": "Scenario archive-ready", "value": f"{scenario_ready:,}", "delta": f"{scenario_gb:,} GB recoverable", "style": "good"},
-            {"label": "Ready delta", "value": f"{delta_ready:+,}", "delta": "Change versus baseline", "style": "warn" if delta_ready < 0 else "good"},
-            {"label": "Workflow threshold", "value": f"{workflow_threshold*100:.0f}%", "delta": "Configurable client policy", "style": "purple"},
-            {"label": "Residence buffer", "value": f"{residence_buffer:+} mo", "delta": "Added to object minimum", "style": "accent"},
+            {"label": "Current archive-ready", "value": f"{current_ready:,}", "delta": "Baseline"},
+            {"label": "Scenario archive-ready", "value": f"{scenario_ready:,}", "delta": f"{scenario_gb:,} GB"},
+            {"label": "Ready delta", "value": f"{delta_ready:+,}", "delta": "vs baseline"},
+            {"label": "Workflow threshold", "value": f"{workflow_threshold*100:.0f}%", "delta": "Policy"},
+            {"label": "Residence buffer", "value": f"{residence_buffer:+} mo", "delta": "Policy"},
         ]
     )
 
@@ -1085,10 +1422,11 @@ with tabs[5]:
                 st.plotly_chart(fig, width="stretch")
     st.markdown("</div>", unsafe_allow_html=True)
 
-with tabs[6]:
+with tabs[7]:
     st.markdown('<div class="section"><h2>Exports and client handoff</h2>', unsafe_allow_html=True)
     ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
     package_summary, package_detail = build_archive_packages(fdf, 2.5, 250)
+    deletion_export = add_deletion_readiness(fdf)
     report_text = client_report(fdf, package_summary, cleanup_backlog, issues, obj_summary)
 
     csv_buf = io.StringIO()
@@ -1097,8 +1435,10 @@ with tabs[6]:
     cleanup_backlog.to_csv(backlog_buf, index=False)
     package_buf = io.StringIO()
     package_summary.to_csv(package_buf, index=False)
+    deletion_buf = io.StringIO()
+    deletion_export.to_csv(deletion_buf, index=False)
 
-    e1, e2, e3, e4 = st.columns(4)
+    e1, e2, e3, e4, e5 = st.columns(5)
     with e1:
         st.download_button(
             "Download scan results CSV",
@@ -1124,6 +1464,14 @@ with tabs[6]:
             width="stretch",
         )
     with e4:
+        st.download_button(
+            "Download deletion rules CSV",
+            data=deletion_buf.getvalue(),
+            file_name=f"sap_archiving_deletion_readiness_{ts}.csv",
+            mime="text/csv",
+            width="stretch",
+        )
+    with e5:
         st.download_button(
             "Download client report MD",
             data=report_text,
