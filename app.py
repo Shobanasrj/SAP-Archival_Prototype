@@ -1,1503 +1,853 @@
-"""
-SAP Archiving Assistant — Streamlit prototype.
-
-Client-demo app for SAP ECC/S/4 archiving assessment:
-- scans synthetic SAP objects for data-quality, workflow, dependency, and residence-time risks
-- scores archivability with transparent rules plus optional IsolationForest anomaly detection
-- plans cleanup backlog and archive run packages
-- supports what-if policy tuning and downloadable client-ready outputs
-
-Run: python -m streamlit run app.py
-All data is synthetic. No SAP connection is required.
-"""
-from __future__ import annotations
-
-import io
-from datetime import UTC, datetime
-
-import numpy as np
-import pandas as pd
 import streamlit as st
+import pandas as pd
+import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import json, io, requests
+from datetime import datetime
 
-from archivability import (
-    RULES,
-    RULE_WEIGHTS,
-    SKLEARN_AVAILABLE,
-    detect_data_issues,
-    run_full_pipeline,
-)
-from data_generator import generate_objects, summary_by_object
-from reporting import build_markdown_report
-
-try:
-    import plotly.express as px
-    import plotly.graph_objects as go
-
-    PLOTLY_AVAILABLE = True
-except Exception:
-    PLOTLY_AVAILABLE = False
-
-
+# ── Page config ────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="SAP Archiving Assistant",
+    page_title="SAP Archival AI Assistant",
     page_icon="🗄️",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="expanded"
 )
 
-
-PRIMARY = "#0a6e8c"
-PRIMARY_DARK = "#063f51"
-ACCENT = "#1ba0bf"
-SURFACE = "#ffffff"
-BG = "#f4f7fa"
-INK = "#0e1c26"
-MUTED = "#5c6f7a"
-
-STATUS_COLORS = {
-    "ARCHIVE": "#0a6e8c",
-    "REVIEW": "#c97a17",
-    "REMEDIATE": "#a83232",
-    "DEDUPLICATE": "#7a3aa8",
-    "RETAIN": "#4a5c66",
-}
-
-CUSTOM_CSS = f"""
+# ── Custom CSS ─────────────────────────────────────────────────────
+st.markdown("""
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono&display=swap');
-
-  html, body, [class*="css"], [data-testid="stAppViewContainer"] {{
-    font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-    color: {INK};
-  }}
-  [data-testid="stAppViewContainer"] {{ background: {BG}; }}
-  [data-testid="stHeader"] {{ background: transparent; }}
-  .block-container {{
-    padding-top: 1.35rem !important;
-    padding-bottom: 1.5rem !important;
-    max-width: 1420px;
-  }}
-  [data-testid="stSidebar"] {{
-    background: linear-gradient(180deg, {PRIMARY_DARK} 0%, #04303f 100%);
-  }}
-  [data-testid="stSidebar"] > div:first-child {{
-    padding-top: 1.35rem;
-  }}
-  [data-testid="stSidebar"] * {{ color: #e8f1f5 !important; }}
-  [data-testid="stSidebar"] input, [data-testid="stSidebar"] textarea {{
-    color: {INK} !important;
-  }}
-  [data-testid="stSidebar"] [role="option"], [data-testid="stSidebar"] [data-baseweb="select"] * {{
-    color: {INK} !important;
-  }}
-  [data-testid="stSidebar"] [data-baseweb="tag"] {{
-    background: #12a7c8 !important;
-  }}
-  [data-testid="stSidebar"] .stButton > button {{
-    width: 100%;
-    min-height: 46px;
-    background: linear-gradient(90deg, #12a7c8, #0a7c97);
-    border-radius: 12px;
-    color: white;
-    box-shadow: 0 10px 24px rgba(0,0,0,0.18);
-  }}
-  .sidebar-brand {{
-    border: 1px solid rgba(255,255,255,.16);
-    background: rgba(255,255,255,.08);
-    border-radius: 18px;
-    padding: 16px 14px;
-    margin-bottom: 16px;
-  }}
-  .cap-logo {{
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    font-size: 20px;
-    font-weight: 850;
-    letter-spacing: -0.03em;
-  }}
-  .cap-mark {{
-    width: 34px;
-    height: 34px;
-    border-radius: 11px 11px 18px 11px;
-    display: inline-grid;
-    place-items: center;
-    background: linear-gradient(135deg, #12a7c8, #7de3f5);
-    color: #04303f;
-    font-weight: 900;
-    font-size: 18px;
-  }}
-  .side-caption {{
-    margin-top: 8px;
-    color: rgba(232,241,245,.76) !important;
-    font-size: 12px;
-    line-height: 1.4;
-  }}
-  .side-card {{
-    background: rgba(255,255,255,.08);
-    border: 1px solid rgba(255,255,255,.14);
-    border-radius: 15px;
-    padding: 13px 13px 5px;
-    margin: 12px 0;
-  }}
-  .side-card-title {{
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: .12em;
-    font-weight: 850;
-    color: rgba(232,241,245,.72) !important;
-    margin-bottom: 8px;
-  }}
-  .brand-bar {{
-    background: linear-gradient(90deg, {PRIMARY_DARK} 0%, {PRIMARY} 64%, {ACCENT} 100%);
-    color: #fff;
-    padding: 18px 24px;
-    border-radius: 18px;
-    margin-bottom: 14px;
-    box-shadow: 0 8px 24px rgba(6,63,81,0.12);
-    display: grid;
-    grid-template-columns: 1fr auto;
-    gap: 18px;
-    align-items: center;
-  }}
-  .brand-bar h1 {{
-    margin: 0;
-    font-size: 30px;
-    font-weight: 800;
-    letter-spacing: -0.02em;
-  }}
-  .brand-bar p {{
-    margin: 6px 0 0 0;
-    opacity: 0.94;
-    font-size: 14px;
-    max-width: 980px;
-    line-height: 1.55;
-  }}
-  .top-logo {{
-    text-align: right;
-    min-width: 210px;
-  }}
-  .capgemini-word {{
-    font-size: 24px;
-    font-weight: 850;
-    letter-spacing: -0.04em;
-  }}
-  .capgemini-note {{
-    margin-top: 4px;
-    font-size: 11px;
-    letter-spacing: .12em;
-    text-transform: uppercase;
-    opacity: .78;
-  }}
-  .status-strip {{
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 10px;
-    margin: 0 0 14px 0;
-  }}
-  .status-tile {{
-    background: white;
-    border: 1px solid #e1e8ee;
-    border-radius: 14px;
-    padding: 10px 14px;
-    box-shadow: 0 1px 2px rgba(14,28,38,0.035);
-  }}
-  .status-label {{
-    color: {MUTED};
-    font-size: 10px;
-    letter-spacing: .1em;
-    text-transform: uppercase;
-    font-weight: 850;
-  }}
-  .status-value {{
-    margin-top: 4px;
-    font-size: 15px;
-    font-weight: 800;
-    color: {INK};
-  }}
-  .badges {{
-    margin-top: 12px;
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-  }}
-  .pill {{
-    display: inline-block;
-    background: rgba(255,255,255,0.16);
-    border: 1px solid rgba(255,255,255,0.18);
-    padding: 4px 10px;
-    border-radius: 999px;
-    font-size: 12px;
-    font-weight: 700;
-  }}
-  .section {{
-    background: {SURFACE};
-    border: 1px solid #e1e8ee;
-    border-radius: 14px;
-    padding: 18px 20px;
-    margin-bottom: 16px;
-    box-shadow: 0 1px 2px rgba(14,28,38,0.035);
-  }}
-  .section h2 {{
-    font-size: 17px;
-    font-weight: 750;
-    margin: 0 0 12px 0;
-    letter-spacing: -0.01em;
-  }}
-  .hint {{
-    color: {MUTED};
-    font-size: 13px;
-    font-weight: 450;
-  }}
-  .kpi-grid {{
-    display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-    gap: 12px;
-  }}
-  @media (max-width: 1280px) {{
-    .kpi-grid {{ grid-template-columns: repeat(3, 1fr); }}
-  }}
-  @media (max-width: 820px) {{
-    .kpi-grid {{ grid-template-columns: repeat(1, 1fr); }}
-  }}
-  .kpi {{
-    background: {SURFACE};
-    border: 1px solid #e1e8ee;
-    border-radius: 14px;
-    padding: 15px 16px;
-    min-height: 110px;
-    box-shadow: 0 1px 2px rgba(14,28,38,0.04);
-  }}
-  .kpi .label {{
-    color: {MUTED};
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    font-weight: 800;
-  }}
-  .kpi .value {{
-    color: {INK};
-    font-size: 28px;
-    font-weight: 800;
-    margin-top: 6px;
-    font-variant-numeric: tabular-nums;
-  }}
-  .kpi .delta {{ color: {MUTED}; font-size: 12px; margin-top: 4px; line-height: 1.35; }}
-  .accent {{ border-left: 4px solid {PRIMARY}; }}
-  .good {{ border-left: 4px solid #2f8a3e; }}
-  .warn {{ border-left: 4px solid #c97a17; }}
-  .danger {{ border-left: 4px solid #a83232; }}
-  .purple {{ border-left: 4px solid #7a3aa8; }}
-  .badge {{
-    display: inline-block;
-    padding: 3px 9px;
-    border-radius: 999px;
-    font-size: 11px;
-    font-weight: 750;
-    letter-spacing: 0.03em;
-  }}
-  .playbook {{
-    border: 1px solid #e1e8ee;
-    border-radius: 12px;
-    padding: 12px 14px;
-    background: #f8fbfc;
-    margin-bottom: 10px;
-  }}
-  .stButton > button, .stDownloadButton > button {{
-    background: {PRIMARY};
-    color: #fff;
-    border: 0;
-    border-radius: 8px;
-    padding: 8px 16px;
-    font-weight: 700;
-  }}
-  .stButton > button:hover, .stDownloadButton > button:hover {{
-    background: {PRIMARY_DARK};
-  }}
-  [data-testid="stDataFrame"] {{ border-radius: 10px; overflow: hidden; }}
-  .footer {{
-    color: {MUTED};
-    font-size: 12px;
-    text-align: center;
-    padding: 16px 0 4px;
-  }}
-  @media (max-width: 900px) {{
-    .brand-bar {{ grid-template-columns: 1fr; }}
-    .top-logo {{ text-align:left; min-width:0; }}
-    .status-strip {{ grid-template-columns: repeat(2, 1fr); }}
-  }}
+    .main-header {
+        background: linear-gradient(135deg, #1A2B5E 0%, #2E86C1 100%);
+        padding: 1.2rem 1.5rem; border-radius: 10px; margin-bottom: 1.2rem;
+        color: white;
+    }
+    .main-header h1 { color: white; margin: 0; font-size: 1.6rem; }
+    .main-header p  { color: #D8E6F3; margin: 0.3rem 0 0; font-size: 0.9rem; }
+    .metric-card {
+        background: white; border: 1px solid #E2E8F0; border-radius: 8px;
+        padding: 1rem; text-align: center;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+    }
+    .metric-card .val { font-size: 1.8rem; font-weight: 700; color: #1A2B5E; }
+    .metric-card .lbl { font-size: 0.75rem; color: #64748B; margin-top: 0.2rem; }
+    .risk-HIGH   { background: #FEF2F2; border-left: 4px solid #EF4444; padding: 0.5rem 0.8rem; border-radius: 4px; }
+    .risk-MEDIUM { background: #FFFBEB; border-left: 4px solid #F59E0B; padding: 0.5rem 0.8rem; border-radius: 4px; }
+    .risk-LOW    { background: #F0FDF4; border-left: 4px solid #22C55E; padding: 0.5rem 0.8rem; border-radius: 4px; }
+    .chat-msg-user { background: #EBF5FF; border-radius: 8px; padding: 0.75rem 1rem; margin: 0.4rem 0; }
+    .chat-msg-ai   { background: #F0F5FB; border-radius: 8px; padding: 0.75rem 1rem; margin: 0.4rem 0; border-left: 3px solid #1A2B5E; }
+    .section-badge { 
+        background: #1A2B5E; color: white; padding: 0.25rem 0.75rem; 
+        border-radius: 20px; font-size: 0.75rem; font-weight: 600; display: inline-block;
+    }
+    .opentext-box {
+        background: linear-gradient(135deg, #1A2B5E 0%, #2E4070 100%);
+        border: 1px solid #E8A020; border-radius: 8px;
+        padding: 1rem; color: white; margin: 0.8rem 0;
+    }
+    .opentext-box h4 { color: #E8A020; margin: 0 0 0.5rem; }
+    .stTabs [data-baseweb="tab-list"] { gap: 6px; }
+    .stTabs [data-baseweb="tab"] {
+        background: #F0F5FB; border-radius: 6px 6px 0 0;
+        padding: 0.5rem 1.2rem; font-weight: 600; color: #1A2B5E;
+    }
+    .stTabs [aria-selected="true"] {
+        background: #1A2B5E !important; color: white !important;
+    }
 </style>
-"""
-st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+""", unsafe_allow_html=True)
 
-
-@st.cache_data(show_spinner=False)
-def load_data(seed: int, n_per_object: int) -> pd.DataFrame:
-    df = generate_objects(seed=seed, n_per_object=n_per_object)
-    return run_full_pipeline(df)
-
-
-def gb(series: pd.Series) -> float:
-    return round(float(series.sum()) / 1024, 2)
-
-
-def pct(part: int | float, total: int | float) -> float:
-    return round(100.0 * float(part) / max(float(total), 1.0), 1)
-
-
-def fig_layout(fig, height: int = 340):
-    fig.update_layout(
-        margin=dict(l=10, r=10, t=10, b=10),
-        height=height,
-        plot_bgcolor="white",
-        paper_bgcolor="white",
-        font=dict(family="Inter", size=12, color=INK),
-        legend_title_text="",
-    )
-    return fig
-
-
-def render_kpis(cards: list[dict]):
-    """Render KPI cards using Streamlit-native metrics.
-
-    Avoid custom HTML here because Streamlit can occasionally render partial
-    HTML as raw text depending on local browser/markdown parsing behavior.
-    """
-    render_native_metrics(cards)
-
-
-def render_native_metrics(cards: list[dict]):
-    """Render compact KPI cards using Streamlit-native metrics for maximum reliability."""
-    cols = st.columns(len(cards))
-    for col, card in zip(cols, cards):
-        col.metric(card["label"], card["value"], card.get("delta", None))
-
-
-def recommendation_counts(frame: pd.DataFrame) -> pd.DataFrame:
-    order = ["ARCHIVE", "REVIEW", "REMEDIATE", "DEDUPLICATE", "RETAIN"]
-    counts = frame["recommendation"].value_counts().reindex(order, fill_value=0)
-    return counts.rename_axis("recommendation").reset_index(name="count")
-
-
-def build_cleanup_backlog(frame: pd.DataFrame) -> pd.DataFrame:
-    if frame.empty:
-        return pd.DataFrame()
-    backlog = frame[
-        (frame["recommendation"].isin(["REMEDIATE", "DEDUPLICATE", "REVIEW"]))
-        | frame["duplicate_flag"]
-        | frame["inconsistency_flag"]
-        | (frame["workflow_completion"] < 0.95)
-        | frame["has_open_dependencies"]
-        | frame["legal_hold"]
-    ].copy()
-
-    conditions = [
-        backlog["legal_hold"],
-        backlog["duplicate_flag"],
-        backlog["inconsistency_flag"] | (backlog["data_quality_score"] < 0.7),
-        backlog["has_open_dependencies"],
-        backlog["workflow_completion"] < 0.95,
-    ]
-    backlog["issue_type"] = np.select(
-        conditions,
-        ["Legal hold", "Duplicate", "Data inconsistency", "Open dependency", "Incomplete workflow"],
-        default="Manual review",
-    )
-    backlog["suggested_action"] = np.select(
-        conditions,
-        [
-            "Confirm retention/legal hold owner before excluding from archive package",
-            "Run duplicate-key consolidation and retain golden document",
-            "Correct status/reference mismatch, then re-run archivability rules",
-            "Resolve downstream document flow or open settlement dependencies",
-            "Close or cancel workflow items with business owner approval",
-        ],
-        default="Route to business owner for disposition decision",
-    )
-    backlog["owner_group"] = np.select(
-        conditions,
-        ["Legal/Compliance", "Data Steward", "Data Steward", "Functional Owner", "Workflow Owner"],
-        default="Business Owner",
-    )
-    backlog["effort"] = np.select(
-        [
-            backlog["issue_type"].isin(["Legal hold", "Open dependency"]),
-            backlog["issue_type"].isin(["Data inconsistency", "Duplicate"]),
-        ],
-        ["High", "Medium"],
-        default="Low",
-    )
-    backlog["target_sla_days"] = np.select(
-        [
-            backlog["effort"].eq("High"),
-            backlog["effort"].eq("Medium"),
-        ],
-        [20, 10],
-        default=5,
-    )
-    return backlog.sort_values(["priority_score", "size_mb"], ascending=False)
-
-
-def build_archive_packages(frame: pd.DataFrame, max_package_gb: float, max_records: int) -> tuple[pd.DataFrame, pd.DataFrame]:
-    candidates = frame[frame["recommendation"] == "ARCHIVE"].copy()
-    if candidates.empty:
-        return pd.DataFrame(), candidates
-
-    candidates = candidates.sort_values(
-        ["archiving_object", "priority_score", "size_mb"],
-        ascending=[True, False, False],
-    ).copy()
-    package_ids = []
-    current_object = None
-    wave = 1
-    package_gb = 0.0
-    package_records = 0
-
-    for _, row in candidates.iterrows():
-        row_gb = float(row["size_mb"]) / 1024
-        if row["archiving_object"] != current_object:
-            current_object = row["archiving_object"]
-            wave = 1
-            package_gb = 0.0
-            package_records = 0
-        elif package_gb + row_gb > max_package_gb or package_records >= max_records:
-            wave += 1
-            package_gb = 0.0
-            package_records = 0
-
-        package_ids.append(f"{row['archiving_object']}-W{wave:02d}")
-        package_gb += row_gb
-        package_records += 1
-
-    candidates["archive_package"] = package_ids
-    summary = (
-        candidates.groupby(["archive_package", "archiving_object", "module"], as_index=False)
-        .agg(
-            records=("object_id", "count"),
-            size_mb=("size_mb", "sum"),
-            avg_score=("archivability_score", "mean"),
-            max_priority=("priority_score", "max"),
-            oldest_days=("age_days", "max"),
-        )
-        .sort_values(["archiving_object", "archive_package"])
-    )
-    summary["size_gb"] = (summary["size_mb"] / 1024).round(2)
-    summary["avg_score"] = summary["avg_score"].round(1)
-    summary["estimated_runtime_min"] = (summary["records"] * 0.018 + summary["size_gb"] * 5).round(0).astype(int).clip(lower=5)
-    summary["sequence"] = range(1, len(summary) + 1)
-    return summary, candidates
-
-
-def add_deletion_readiness(frame: pd.DataFrame, retention_buffer_months: int = 12) -> pd.DataFrame:
-    """Classify records for deletion/purge after archive validation.
-
-    In SAP archiving, deletion is not the first action. Records should only be
-    considered purge-ready after archive write/read validation and after
-    retention, legal hold, dependency, and data-quality rules pass.
-    """
-    if frame.empty:
-        return frame.copy()
-
-    out = frame.copy()
-    surplus_residence = out["residence_months"] >= (
-        out["min_residence_months"] + retention_buffer_months
-    )
-    clean_gates = (
-        out["recommendation"].eq("ARCHIVE")
-        & surplus_residence
-        & ~out["legal_hold"]
-        & ~out["has_open_dependencies"]
-        & ~out["duplicate_flag"]
-        & ~out["inconsistency_flag"]
-        & (out["data_quality_score"] >= 0.85)
-        & (out["workflow_completion"] >= 0.98)
-        & (out["days_since_activity"] >= 540)
-        & (out["anomaly_score"] <= 0.35)
-    )
-    archive_only = out["recommendation"].eq("ARCHIVE") & ~clean_gates
-    blocked = out["recommendation"].isin(["RETAIN", "REMEDIATE", "DEDUPLICATE"])
-
-    out["deletion_readiness"] = np.select(
-        [clean_gates, archive_only, blocked],
-        [
-            "DELETE_AFTER_ARCHIVE_VALIDATION",
-            "ARCHIVE_ONLY_RETAIN_COPY",
-            "NOT_DELETE_ELIGIBLE",
-        ],
-        default="REVIEW_BEFORE_DELETE",
-    )
-    out["deletion_rationale"] = np.select(
-        [clean_gates, archive_only, blocked],
-        [
-            "Passed strict purge gates; delete only after archive write/read validation and approval.",
-            "Archive candidate, but not purge-ready under stricter retention/quality gates.",
-            "Blocked by retain/remediate/deduplicate recommendation.",
-        ],
-        default="Needs business/legal review before any deletion decision.",
-    )
-    out["residence_surplus_months"] = (
-        out["residence_months"] - out["min_residence_months"]
-    ).round(1)
-    return out
-
-
-def build_scenario(frame: pd.DataFrame, residence_buffer: int, workflow_threshold: float, dq_threshold: float, idle_months: int) -> pd.DataFrame:
-    if frame.empty:
-        return frame.copy()
-    scenario = frame.copy()
-    residence_ok = scenario["residence_months"] >= (scenario["min_residence_months"] + residence_buffer)
-    status_ok = scenario["status"].isin(["COMPLETED", "ARCHIVED_CANDIDATE"])
-    workflow_ok = scenario["workflow_completion"] >= workflow_threshold
-    idle_ok = scenario["days_since_activity"] >= idle_months * 30
-    hold_ok = ~scenario["legal_hold"]
-    deps_ok = ~scenario["has_open_dependencies"]
-    dq_ok = scenario["data_quality_score"] >= dq_threshold
-
-    score = (
-        residence_ok.astype(float) * RULE_WEIGHTS["residence_met"]
-        + status_ok.astype(float) * RULE_WEIGHTS["status_terminal"]
-        + workflow_ok.astype(float) * RULE_WEIGHTS["workflow_complete"]
-        + idle_ok.astype(float) * RULE_WEIGHTS["no_recent_activity"]
-        + hold_ok.astype(float) * RULE_WEIGHTS["no_legal_hold"]
-        + deps_ok.astype(float) * RULE_WEIGHTS["no_open_dependencies"]
-        + dq_ok.astype(float) * RULE_WEIGHTS["data_quality_ok"]
-    )
-    scenario["scenario_score"] = score.round(1)
-    scenario["scenario_archive_ready"] = (
-        (scenario["scenario_score"] >= 80)
-        & residence_ok
-        & status_ok
-        & workflow_ok
-        & idle_ok
-        & hold_ok
-        & deps_ok
-        & dq_ok
-        & ~scenario["duplicate_flag"]
-        & ~scenario["inconsistency_flag"]
-    )
-    return scenario
-
-
-def client_report(frame: pd.DataFrame, packages: pd.DataFrame, backlog: pd.DataFrame, issues: dict, summary: pd.DataFrame) -> str:
-    base = build_markdown_report(frame, issues, summary)
-    archive_n = int((frame["recommendation"] == "ARCHIVE").sum())
-    cleanup_n = len(backlog)
-    package_n = len(packages)
-    lines = [
-        base,
-        "",
-        "## Client implementation plan",
-        "",
-        f"- Recommended archive packages: **{package_n:,}**",
-        f"- Archive candidates to include in pilot: **{archive_n:,}**",
-        f"- Cleanup backlog items before broad archive run: **{cleanup_n:,}**",
-        "",
-        "### Proposed phases",
-        "",
-        "1. **Validate rules:** confirm residence/retention policy by object with business, legal, and compliance owners.",
-        "2. **Clean blockers:** remediate duplicate, workflow, dependency, legal-hold, and status inconsistency items.",
-        "3. **Pilot archive package:** run the highest-score, lowest-risk package first and verify retrieval/read-only access.",
-        "4. **Scale waves:** schedule remaining packages by object family, storage impact, and business calendar constraints.",
-        "5. **Validate deletion rules:** only mark records for purge after archive write/read validation, retention approval, and legal/compliance review.",
-        "6. **Operationalize:** convert prototype rules into SAP ILM/ADK jobs, retention warehouse controls, and monitoring KPIs.",
-    ]
-    if len(packages):
-        lines.extend(["", "### Top archive packages", "", "| Package | Object | Records | Size GB | Avg score | Runtime min |", "| --- | --- | ---: | ---: | ---: | ---: |"])
-        for _, r in packages.head(10).iterrows():
-            lines.append(
-                f"| {r['archive_package']} | {r['archiving_object']} | {int(r['records']):,} | {r['size_gb']} | {r['avg_score']} | {int(r['estimated_runtime_min'])} |"
-            )
-    return "\n".join(lines)
-
-
-with st.sidebar:
-    st.markdown(
-        """
-        <div class="sidebar-brand">
-          <div class="cap-logo"><span class="cap-mark">⌁</span><span>Capgemini</span></div>
-          <div class="side-caption">SAP Archiving Assistant<br>AI-powered data retirement cockpit</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    st.markdown('<div class="side-card"><div class="side-card-title">Dataset controls</div>', unsafe_allow_html=True)
-    seed = st.number_input("Random seed", value=42, step=1, min_value=0, max_value=9999)
-    n_per_object = st.slider("Records per object", 100, 800, 350, step=50)
-    if st.button("Regenerate dataset", width="stretch"):
-        st.cache_data.clear()
-    st.markdown("</div>", unsafe_allow_html=True)
-
-df = load_data(int(seed), int(n_per_object))
-
-with st.sidebar:
-    st.markdown('<div class="side-card"><div class="side-card-title">Scope filters</div>', unsafe_allow_html=True)
-    objects_avail = sorted(df["archiving_object"].unique().tolist())
-    modules_avail = sorted(df["module"].unique().tolist())
-    company_codes = sorted(df["company_code"].unique().tolist())
-    statuses_avail = sorted(df["status"].unique().tolist())
-
-    sel_objects = st.multiselect("Archiving object", objects_avail, default=objects_avail)
-    sel_modules = st.multiselect("Module", modules_avail, default=modules_avail)
-    sel_company = st.multiselect("Company code", company_codes, default=company_codes)
-    sel_status = st.multiselect("Status", statuses_avail, default=statuses_avail)
-    min_score = st.slider("Min archivability score", 0, 100, 0, step=5)
-    only_archivable = st.checkbox("Only show ARCHIVE candidates", value=False)
-    exclude_legal_hold = st.checkbox("Exclude legal-hold records", value=True)
-    search_text = st.text_input("Search object ID/table/status", value="")
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    st.markdown('<div class="side-card"><div class="side-card-title">Client context</div>', unsafe_allow_html=True)
-    client_name = st.text_input("Client / program name", value="SAP Data Archiving Assessment")
-    ml_label = "scikit-learn IsolationForest" if SKLEARN_AVAILABLE else "Heuristic fallback"
-    chart_label = "Plotly" if PLOTLY_AVAILABLE else "Streamlit native"
-    st.markdown(
-        f"""
-        <div class="side-caption">
-          Anomaly engine: <b>{ml_label}</b><br>
-          Chart engine: <b>{chart_label}</b><br>
-          Mode: Client demo / synthetic data
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    st.markdown("</div>", unsafe_allow_html=True)
-
-mask = (
-    df["archiving_object"].isin(sel_objects)
-    & df["module"].isin(sel_modules)
-    & df["company_code"].isin(sel_company)
-    & df["status"].isin(sel_status)
-    & (df["archivability_score"] >= min_score)
-)
-if only_archivable:
-    mask &= df["recommendation"].eq("ARCHIVE")
-if exclude_legal_hold:
-    mask &= ~df["legal_hold"]
-if search_text.strip():
-    q = search_text.strip().lower()
-    mask &= (
-        df["object_id"].str.lower().str.contains(q)
-        | df["archiving_object"].str.lower().str.contains(q)
-        | df["table"].str.lower().str.contains(q)
-        | df["status"].str.lower().str.contains(q)
-    )
-
-fdf = df[mask].copy()
-issues = detect_data_issues(fdf) if len(fdf) else {
-    "duplicates": 0,
-    "inconsistencies": 0,
-    "incomplete_workflows": 0,
-    "stale_open": 0,
-    "errors": 0,
-    "legal_holds": 0,
+# ── SAP Archiving Objects Master Reference ─────────────────────────
+SAP_ARCHIVE_OBJECTS = {
+    "FI_DOCUMNT": {
+        "module": "FI", "description": "FI Financial Documents",
+        "tables": ["BKPF","BSEG","BSAS","BSAK","BSIK","BSAD"],
+        "typical_retention_yrs": 10,
+        "ilm_capable": True, "opentext_compatible": True,
+        "complexity": "Medium", "business_impact": "High",
+        "notes": "Largest FI object. Includes G/L, AP, AR. Requires fiscal year-end close before archiving.",
+        "tcode_check": "FB03", "prerequisite": "Cleared items only"
+    },
+    "MM_MATBEL": {
+        "module": "MM", "description": "Material Documents",
+        "tables": ["MKPF","MSEG"],
+        "typical_retention_yrs": 7,
+        "ilm_capable": True, "opentext_compatible": True,
+        "complexity": "Low", "business_impact": "Medium",
+        "notes": "Goods movements. High volume, good quick win. No open items dependency.",
+        "tcode_check": "MB03", "prerequisite": "No open purchase orders"
+    },
+    "MM_EKKO": {
+        "module": "MM", "description": "Purchasing Documents",
+        "tables": ["EKKO","EKPO","EKBE","EKET"],
+        "typical_retention_yrs": 7,
+        "ilm_capable": True, "opentext_compatible": True,
+        "complexity": "Medium", "business_impact": "Medium",
+        "notes": "Purchase orders, contracts, RFQs. Must be fully delivered and invoiced.",
+        "tcode_check": "ME23N", "prerequisite": "Delivery complete, invoice verified"
+    },
+    "SD_VBAK": {
+        "module": "SD", "description": "Sales Documents",
+        "tables": ["VBAK","VBAP","VBFA","VBUK"],
+        "typical_retention_yrs": 7,
+        "ilm_capable": True, "opentext_compatible": True,
+        "complexity": "High", "business_impact": "High",
+        "notes": "Sales orders and deliveries. Complex inter-document dependencies via VBFA.",
+        "tcode_check": "VA03", "prerequisite": "Fully delivered, billed, and closed"
+    },
+    "PP_ORDER": {
+        "module": "PP", "description": "Production Orders",
+        "tables": ["AUFK","AUFM","AFKO","AFPO"],
+        "typical_retention_yrs": 5,
+        "ilm_capable": True, "opentext_compatible": True,
+        "complexity": "High", "business_impact": "Medium",
+        "notes": "Production orders with settlements. Costing run must be complete.",
+        "tcode_check": "CO03", "prerequisite": "TECO status, settlement complete"
+    },
+    "CO_CCTR_EP": {
+        "module": "CO", "description": "CO Cost Centre Actual Postings",
+        "tables": ["COEP","COEPL","COSP","COSR"],
+        "typical_retention_yrs": 10,
+        "ilm_capable": False, "opentext_compatible": True,
+        "complexity": "Medium", "business_impact": "High",
+        "notes": "Controlling line items. Period-end and year-end close required.",
+        "tcode_check": "KSB1", "prerequisite": "Period-end close complete"
+    },
+    "QM_QMEL": {
+        "module": "QM", "description": "Quality Notifications",
+        "tables": ["QMEL","QMFE","QMMA"],
+        "typical_retention_yrs": 5,
+        "ilm_capable": True, "opentext_compatible": True,
+        "complexity": "Low", "business_impact": "Low",
+        "notes": "Good quick win. Must be in completed status (NOCO).",
+        "tcode_check": "QM03", "prerequisite": "NOCO status"
+    },
+    "PM_ORDER": {
+        "module": "PM", "description": "PM Maintenance Orders",
+        "tables": ["AUFK","AFIH","QMEL"],
+        "typical_retention_yrs": 5,
+        "ilm_capable": True, "opentext_compatible": True,
+        "complexity": "Medium", "business_impact": "Low",
+        "notes": "Plant maintenance orders. Must have TECO status and settlement complete.",
+        "tcode_check": "IW33", "prerequisite": "TECO + settlement"
+    },
+    "MM_INVBEL": {
+        "module": "MM", "description": "Inventory Documents (Physical Inv)",
+        "tables": ["IKPF","ISEG"],
+        "typical_retention_yrs": 5,
+        "ilm_capable": False, "opentext_compatible": True,
+        "complexity": "Low", "business_impact": "Low",
+        "notes": "Physical inventory documents. Easy quick win with minimal dependencies.",
+        "tcode_check": "MI03", "prerequisite": "Count completed and posted"
+    },
+    "CHANGEDOCU": {
+        "module": "Basis", "description": "Change Documents",
+        "tables": ["CDHDR","CDPOS"],
+        "typical_retention_yrs": 7,
+        "ilm_capable": False, "opentext_compatible": True,
+        "complexity": "Low", "business_impact": "Low",
+        "notes": "Change log for master data. Very large tables. Excellent quick win for DB reduction.",
+        "tcode_check": "SCDO", "prerequisite": "None — run first for quick wins"
+    },
+    "IDOCREL": {
+        "module": "Basis", "description": "IDoc Records",
+        "tables": ["EDIDC","EDID4","EDIDS"],
+        "typical_retention_yrs": 3,
+        "ilm_capable": False, "opentext_compatible": True,
+        "complexity": "Low", "business_impact": "Low",
+        "notes": "EDI/IDoc records. Very high volume. Can be archived aggressively after processing.",
+        "tcode_check": "WE02", "prerequisite": "Status 53 (successfully posted)"
+    },
+    "SPOOL": {
+        "module": "Basis", "description": "Spool Requests",
+        "tables": ["TSP01","TSP02"],
+        "typical_retention_yrs": 1,
+        "ilm_capable": False, "opentext_compatible": False,
+        "complexity": "Low", "business_impact": "Low",
+        "notes": "Print spool. Automatic deletion usually preferred over archiving. Quick DB win.",
+        "tcode_check": "SP01", "prerequisite": "Completed spool requests"
+    },
 }
-obj_summary = summary_by_object(fdf) if len(fdf) else pd.DataFrame()
-cleanup_backlog = build_cleanup_backlog(fdf)
-deletion_df = add_deletion_readiness(fdf)
 
-total = len(fdf)
-archive_n = int((fdf["recommendation"] == "ARCHIVE").sum()) if total else 0
-review_n = int((fdf["recommendation"] == "REVIEW").sum()) if total else 0
-remediate_n = int(fdf["recommendation"].isin(["REMEDIATE", "DEDUPLICATE"]).sum()) if total else 0
-retain_n = int((fdf["recommendation"] == "RETAIN").sum()) if total else 0
-total_size_gb = gb(fdf["size_mb"]) if total else 0.0
-archive_size_gb = gb(fdf.loc[fdf["recommendation"] == "ARCHIVE", "size_mb"]) if total else 0.0
-pct_archivable = pct(archive_n, total)
-
-st.markdown(
-    f"""
-    <div class="brand-bar">
-      <div>
-        <h1>SAP Archiving Assistant</h1>
-        <p><b>{client_name}</b> — AI-powered SAP data retirement cockpit for discovery, cleanup planning,
-        archive package sequencing, deletion readiness, and policy what-if analysis.</p>
-        <div class="badges">
-          <span class="pill">Synthetic SAP ECC/S/4 data</span>
-          <span class="pill">Anomaly: {ml_label}</span>
-          <span class="pill">Charts: {chart_label}</span>
-          <span class="pill">{len(df):,} generated records</span>
-        </div>
-      </div>
-      <div class="top-logo">
-        <div class="capgemini-word">Capgemini</div>
-        <div class="capgemini-note">Insights & Data</div>
-      </div>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-
-st.markdown(
-    f"""
-    <div class="status-strip">
-      <div class="status-tile"><div class="status-label">Program lens</div><div class="status-value">Archive + ILM readiness</div></div>
-      <div class="status-tile"><div class="status-label">Filtered records</div><div class="status-value">{total:,}</div></div>
-      <div class="status-tile"><div class="status-label">Archive-ready</div><div class="status-value">{archive_n:,} records</div></div>
-      <div class="status-tile"><div class="status-label">Recoverable footprint</div><div class="status-value">{archive_size_gb:,} GB</div></div>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-
-tabs = st.tabs(
-    [
-        "Executive Cockpit",
-        "Scan Results",
-        "Cleanup Backlog",
-        "Archive Planner",
-        "Deletion Rules",
-        "Object Drilldown",
-        "What-if Rules",
-        "Exports",
+# ── Helper: generate synthetic table data ──────────────────────────
+def generate_db02_data():
+    """Simulate what you'd export from SAP DB02 / DBACOCKPIT"""
+    tables = [
+        ("BSEG",    45200, 1850), ("MSEG",    38400, 920),
+        ("EDID4",   31200, 740),  ("CDPOS",   28800, 680),
+        ("VBFA",    22100, 430),  ("BKPF",    18600, 380),
+        ("COEPL",   16800, 310),  ("KONV",    14500, 290),
+        ("EDIDC",   13200, 180),  ("MKPF",    11400, 220),
+        ("EKBE",     9800, 160),  ("EKKO",     8700, 140),
+        ("AUFM",     7600, 130),  ("COEP",     7200, 125),
+        ("VBAK",     6800, 118),  ("BSAD",     6200, 110),
+        ("TSP01",    5900, 85),   ("IKPF",     5100, 75),
+        ("AFIH",     4800, 70),   ("QMEL",     4200, 62),
     ]
-)
+    df = pd.DataFrame(tables, columns=["TABLE_NAME","ROWS_K","SIZE_GB"])
+    df["SIZE_GB"] = df["SIZE_GB"] / 10
+    df["ROWS"]    = df["ROWS_K"] * 1000
+    return df
 
+def generate_growth_data():
+    """12-month DB growth simulation"""
+    months = pd.date_range(end=datetime.now(), periods=12, freq="ME")
+    base = 3800
+    sizes = [base + i * 45 + np.random.randint(-10, 25) for i in range(12)]
+    return pd.DataFrame({"Month": months, "DB_Size_GB": sizes})
+
+def score_archivability(obj_key, size_gb, rows, manual_overrides=None):
+    """Score an archive object 0-100 with rationale"""
+    obj   = SAP_ARCHIVE_OBJECTS.get(obj_key, {})
+    score = 50
+    reasons = []
+    if size_gb > 50:  score += 20; reasons.append(f"Large table ({size_gb:.0f}GB) — high impact")
+    elif size_gb > 10: score += 10; reasons.append(f"Medium table ({size_gb:.0f}GB)")
+    else:              score -= 5;  reasons.append(f"Small table ({size_gb:.0f}GB) — lower priority")
+    complexity = obj.get("complexity","Medium")
+    if   complexity == "Low":    score += 15; reasons.append("Low technical complexity")
+    elif complexity == "High":   score -= 15; reasons.append("High complexity — careful planning needed")
+    if obj.get("ilm_capable"):   score += 10; reasons.append("ILM-capable — retention policy can be applied")
+    if manual_overrides:
+        if manual_overrides.get("already_identified"): score += 10
+        if manual_overrides.get("business_priority"):  score += 5
+    score = max(0, min(100, score))
+    if   score >= 70: priority = "HIGH"
+    elif score >= 45: priority = "MEDIUM"
+    else:             priority = "LOW"
+    return score, priority, reasons
+
+# ══════════════════════════════════════════════════════════════════════
+# SIDEBAR
+# ══════════════════════════════════════════════════════════════════════
+with st.sidebar:
+    st.markdown("""
+    <div style="background:linear-gradient(135deg,#1A2B5E,#2E86C1);padding:1rem;border-radius:8px;margin-bottom:1rem">
+    <h3 style="color:white;margin:0;font-size:1rem">🗄️ SAP Archival AI Assistant</h3>
+    <p style="color:#D8E6F3;margin:0.3rem 0 0;font-size:0.75rem">Auritas × Capgemini</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("### ⚙️ Configuration")
+    client_name  = st.text_input("Client Name", "Client (Confidential)")
+    sap_system   = st.selectbox("SAP System", ["ECC 6.0 EhP8","ECC 6.0 EhP7","S/4HANA 2021","S/4HANA 2023"])
+    has_opentext = st.toggle("Has OpenText Archive Center", value=True)
+    ilm_licensed = st.toggle("SAP ILM Licensed / RISE", value=False)
+
+    st.markdown("---")
+    st.markdown("### 📁 Import SAP Data")
+    upload_type  = st.selectbox("Source", [
+        "DB02 / DBACOCKPIT Export (CSV)",
+        "TAANA Table Analysis (CSV)",
+        "AL11 File System (TXT)",
+        "SE16 Table Export (CSV)",
+        "Manual Entry / Demo Mode",
+    ])
+    uploaded = st.file_uploader("Upload File", type=["csv","txt","xlsx"])
+
+    st.markdown("---")
+    st.markdown("### 🔑 AI Assistant")
+    st.caption("Powered by Claude · Confidential")
+
+    st.markdown("---")
+    if has_opentext:
+        st.markdown("""
+        <div style="background:#1A2B5E;border:1px solid #E8A020;border-radius:6px;padding:0.6rem">
+        <p style="color:#E8A020;font-size:0.75rem;font-weight:700;margin:0">✅ OpenText Detected</p>
+        <p style="color:#D8E6F3;font-size:0.7rem;margin:0.2rem 0 0">
+        Archives will write to OpenText Archive Center via SAP ArchiveLink</p>
+        </div>
+        """, unsafe_allow_html=True)
+    if ilm_licensed:
+        st.markdown("""
+        <div style="background:#1A6B2E;border-radius:6px;padding:0.6rem;margin-top:0.5rem">
+        <p style="color:white;font-size:0.75rem;font-weight:700;margin:0">✅ ILM Enabled</p>
+        <p style="color:#D8E6F3;font-size:0.7rem;margin:0.2rem 0 0">
+        ILM-ADK files with retention metadata — WebDAV/ILM 3.1 interface</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+# ── Load data ─────────────────────────────────────────────────────
+if uploaded and upload_type != "Manual Entry / Demo Mode":
+    try:
+        if uploaded.name.endswith(".xlsx"):
+            df_db = pd.read_excel(uploaded)
+        else:
+            df_db = pd.read_csv(uploaded)
+        # Try to normalise column names
+        df_db.columns = [c.upper().strip() for c in df_db.columns]
+        if "SIZE_GB" not in df_db.columns and "SIZE" in df_db.columns:
+            df_db["SIZE_GB"] = pd.to_numeric(df_db["SIZE"], errors="coerce") / 1024
+        if "ROWS" not in df_db.columns and "ROWS_K" in df_db.columns:
+            df_db["ROWS"] = df_db["ROWS_K"].astype(float) * 1000
+        data_source = f"📤 Uploaded: {uploaded.name}"
+    except Exception as e:
+        st.sidebar.error(f"Parse error: {e}")
+        df_db = generate_db02_data()
+        data_source = "🔄 Demo Mode (upload failed)"
+else:
+    df_db = generate_db02_data()
+    data_source = "🔄 Demo Mode — upload a real SAP DB02 export for live analysis"
+
+df_growth = generate_growth_data()
+
+# ══════════════════════════════════════════════════════════════════════
+# HEADER
+# ══════════════════════════════════════════════════════════════════════
+st.markdown(f"""
+<div class="main-header">
+<h1>🗄️ SAP Data Volume Management — AI Archival Assistant</h1>
+<p>{client_name} &nbsp;|&nbsp; {sap_system} &nbsp;|&nbsp; {data_source} &nbsp;|&nbsp;
+{'✅ OpenText Integrated' if has_opentext else '⬜ No OpenText'} &nbsp;|&nbsp;
+{'✅ ILM Enabled' if ilm_licensed else '⬜ ILM Not Active'}</p>
+</div>
+""", unsafe_allow_html=True)
+
+# ══════════════════════════════════════════════════════════════════════
+# TABS
+# ══════════════════════════════════════════════════════════════════════
+tabs = st.tabs([
+    "📊 DB Sizing Dashboard",
+    "🎯 Archivability Analyzer",
+    "🏗️ Archive Object Catalogue",
+    "🤖 AI Archiving Assistant",
+    "📋 Remediation Playbook",
+    "ℹ️ Context & Methodology",
+])
+
+# ─────────────────────────────────────────────────────────────────────
+# TAB 1: DB SIZING DASHBOARD
+# ─────────────────────────────────────────────────────────────────────
 with tabs[0]:
-    st.markdown(
-        f"""
-        <div class="section">
-          <h2>Executive summary</h2>
-          <p style="margin:0;color:{INK};font-size:14px;line-height:1.58;">
-            Across <b>{total:,}</b> filtered records (<b>{total_size_gb:,} GB</b>), the assistant identified
-            <b>{archive_n:,}</b> high-confidence archive candidates ({pct_archivable}%) with up to
-            <b>{archive_size_gb:,} GB</b> of recoverable online storage. <b>{review_n:,}</b> records need review,
-            <b>{remediate_n:,}</b> need remediation/deduplication, and <b>{retain_n:,}</b> should remain online.
-          </p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    st.markdown('<span class="section-badge">📊 Database Sizing & Growth Analysis</span>', unsafe_allow_html=True)
+    st.caption("Equivalent to SAP transaction DB02 / DBACOCKPIT — upload your export or use demo data")
 
-    render_kpis(
-        [
-            {"label": "Records in scope", "value": f"{total:,}", "delta": f"{total_size_gb:,} GB online footprint", "style": "accent"},
-            {"label": "Archive candidates", "value": f"{archive_n:,}", "delta": f"{pct_archivable}% ready • {archive_size_gb:,} GB recoverable", "style": "good"},
-            {"label": "Review / remediation", "value": f"{review_n + remediate_n:,}", "delta": f"{review_n:,} review · {remediate_n:,} remediate", "style": "warn"},
-            {"label": "Data quality findings", "value": f"{issues['duplicates'] + issues['inconsistencies']:,}", "delta": f"{issues['duplicates']:,} duplicates · {issues['inconsistencies']:,} inconsistencies", "style": "danger"},
-            {"label": "Open workflow gaps", "value": f"{issues['incomplete_workflows']:,}", "delta": f"{issues['stale_open']:,} stale OPEN records", "style": "purple"},
-        ]
-    )
+    total_gb    = df_db["SIZE_GB"].sum()
+    archivable  = df_db[df_db["TABLE_NAME"].isin(
+        [t for obj in SAP_ARCHIVE_OBJECTS.values() for t in obj["tables"]]
+    )]["SIZE_GB"].sum()
+    pct_reduce  = (archivable / total_gb * 100) if total_gb else 0
+    growth_rate = (df_growth["DB_Size_GB"].iloc[-1] - df_growth["DB_Size_GB"].iloc[0]) / 12
 
-    c1, c2 = st.columns([1.15, 1])
-    with c1:
-        st.markdown('<div class="section"><h2>Recommendation mix</h2>', unsafe_allow_html=True)
-        mix = recommendation_counts(fdf) if total else pd.DataFrame(columns=["recommendation", "count"])
-        if PLOTLY_AVAILABLE and len(mix):
-            fig = px.bar(
-                mix,
-                x="recommendation",
-                y="count",
-                color="recommendation",
-                color_discrete_map=STATUS_COLORS,
-                text="count",
-            )
-            fig.update_traces(textposition="outside")
-            fig_layout(fig, 330)
-            fig.update_xaxes(title="")
-            fig.update_yaxes(title="Records", gridcolor="#eef2f5")
-            st.plotly_chart(fig, width="stretch")
-        else:
-            st.bar_chart(mix.set_index("recommendation"))
-        st.markdown("</div>", unsafe_allow_html=True)
+    c1,c2,c3,c4,c5 = st.columns(5)
+    for col, val, lbl in [
+        (c1, f"{total_gb:.0f} GB",      "Total DB Size"),
+        (c2, f"{archivable:.0f} GB",    "Archivable Data"),
+        (c3, f"{pct_reduce:.0f}%",      "Est. Reduction"),
+        (c4, f"{growth_rate:.0f} GB/mo","DB Growth Rate"),
+        (c5, f"{len(df_db)}",           "Tables Analysed"),
+    ]:
+        col.markdown(f"""<div class="metric-card">
+        <div class="val">{val}</div><div class="lbl">{lbl}</div></div>""", unsafe_allow_html=True)
 
-    with c2:
-        st.markdown('<div class="section"><h2>Storage recoverable by object</h2>', unsafe_allow_html=True)
-        storage = (
-            fdf[fdf["recommendation"] == "ARCHIVE"]
-            .groupby("archiving_object")["size_mb"]
-            .sum()
-            .div(1024)
-            .round(2)
-            .reset_index(name="GB recoverable")
-            .sort_values("GB recoverable", ascending=True)
-        )
-        if PLOTLY_AVAILABLE and len(storage):
-            fig = px.bar(storage, x="GB recoverable", y="archiving_object", orientation="h", text="GB recoverable", color_discrete_sequence=[PRIMARY])
-            fig.update_traces(textposition="outside")
-            fig_layout(fig, 330)
-            fig.update_xaxes(title="GB", gridcolor="#eef2f5")
-            fig.update_yaxes(title="")
-            st.plotly_chart(fig, width="stretch")
-        elif len(storage):
-            st.bar_chart(storage.set_index("archiving_object"))
-        else:
-            st.info("No archive candidates in the current filter.")
-        st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown("")
+    col_l, col_r = st.columns([3,2])
 
-    st.markdown('<div class="section"><h2>Readiness by archiving object</h2>', unsafe_allow_html=True)
-    if len(obj_summary):
-        readiness = (
-            fdf.groupby("archiving_object")
-            .agg(
-                records=("object_id", "count"),
-                archive=("recommendation", lambda s: int((s == "ARCHIVE").sum())),
-                avg_score=("archivability_score", "mean"),
-                blockers=("blocked", "sum"),
-            )
-            .reset_index()
-        )
-        readiness["archive_rate"] = (100 * readiness["archive"] / readiness["records"]).round(1)
-        readiness["avg_score"] = readiness["avg_score"].round(1)
-        st.dataframe(
-            readiness.rename(
-                columns={
-                    "archiving_object": "Archiving Object",
-                    "records": "Records",
-                    "archive": "Archive Ready",
-                    "avg_score": "Avg Score",
-                    "blockers": "Hard Blockers",
-                    "archive_rate": "Archive Rate %",
-                }
-            ),
-            width="stretch",
-            hide_index=True,
-        )
-    else:
-        st.info("No records match the current filters.")
-    st.markdown("</div>", unsafe_allow_html=True)
+    with col_l:
+        st.markdown("##### Top 15 Tables by Size")
+        top15 = df_db.nlargest(15,"SIZE_GB")
+        fig = px.bar(top15, x="SIZE_GB", y="TABLE_NAME", orientation="h",
+                     color="SIZE_GB", color_continuous_scale=[[0,"#D8E6F3"],[1,"#1A2B5E"]],
+                     labels={"SIZE_GB":"Size (GB)","TABLE_NAME":"Table"})
+        fig.update_layout(height=380, showlegend=False, margin=dict(l=0,r=0,t=20,b=0),
+                          plot_bgcolor="white", coloraxis_showscale=False)
+        fig.update_xaxes(gridcolor="#F0F0F0")
+        fig.update_yaxes(categoryorder="total ascending")
+        st.plotly_chart(fig, use_container_width=True)
 
+    with col_r:
+        st.markdown("##### DB Growth Trend (12 months)")
+        fig2 = px.area(df_growth, x="Month", y="DB_Size_GB",
+                       color_discrete_sequence=["#2E86C1"])
+        fig2.update_layout(height=200, margin=dict(l=0,r=0,t=10,b=0),
+                           plot_bgcolor="white", showlegend=False)
+        fig2.update_xaxes(gridcolor="#F0F0F0"); fig2.update_yaxes(gridcolor="#F0F0F0")
+        st.plotly_chart(fig2, use_container_width=True)
+
+        st.markdown("##### Module Breakdown")
+        module_map = {}
+        for obj in SAP_ARCHIVE_OBJECTS.values():
+            mod = obj["module"]
+            for tbl in obj["tables"]:
+                row = df_db[df_db["TABLE_NAME"]==tbl]
+                if not row.empty:
+                    module_map[mod] = module_map.get(mod, 0) + row["SIZE_GB"].iloc[0]
+        if module_map:
+            fig3 = px.pie(values=list(module_map.values()),
+                          names=list(module_map.keys()),
+                          color_discrete_sequence=px.colors.sequential.Blues_r,
+                          hole=0.4)
+            fig3.update_layout(height=165, margin=dict(l=0,r=0,t=0,b=0),
+                               legend=dict(font=dict(size=9)))
+            st.plotly_chart(fig3, use_container_width=True)
+
+    # Raw table
+    st.markdown("##### Full Table Detail")
+    st.dataframe(df_db[["TABLE_NAME","SIZE_GB","ROWS"]].rename(columns={
+        "TABLE_NAME":"Table","SIZE_GB":"Size (GB)","ROWS":"Row Count"
+    }).style.background_gradient(subset=["Size (GB)"],cmap="Blues"),
+    use_container_width=True, height=220)
+
+# ─────────────────────────────────────────────────────────────────────
+# TAB 2: ARCHIVABILITY ANALYZER
+# ─────────────────────────────────────────────────────────────────────
 with tabs[1]:
-    c1, c2 = st.columns([1.2, 1])
-    with c1:
-        st.markdown('<div class="section"><h2>Archivability by object and action</h2>', unsafe_allow_html=True)
-        by_obj = fdf.groupby(["archiving_object", "recommendation"]).size().reset_index(name="count") if total else pd.DataFrame()
-        if PLOTLY_AVAILABLE and len(by_obj):
-            fig = px.bar(
-                by_obj,
-                x="archiving_object",
-                y="count",
-                color="recommendation",
-                color_discrete_map=STATUS_COLORS,
-                barmode="stack",
-            )
-            fig_layout(fig, 360)
-            fig.update_xaxes(title="", showgrid=False)
-            fig.update_yaxes(title="Records", gridcolor="#eef2f5")
-            st.plotly_chart(fig, width="stretch")
-        elif len(by_obj):
-            st.bar_chart(by_obj.pivot(index="archiving_object", columns="recommendation", values="count").fillna(0))
-        else:
-            st.info("No records match the current filters.")
-        st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown('<span class="section-badge">🎯 Archivability Scoring & Prioritisation</span>', unsafe_allow_html=True)
+    st.caption("Score each SAP archiving object against your system data — mirrors the blueprint workshop output")
 
-    with c2:
-        st.markdown('<div class="section"><h2>Data-quality finding counts</h2>', unsafe_allow_html=True)
-        qdata = pd.DataFrame(
-            [
-                ("Duplicates", issues["duplicates"]),
-                ("Inconsistencies", issues["inconsistencies"]),
-                ("Incomplete workflows", issues["incomplete_workflows"]),
-                ("Stale OPEN >1y", issues["stale_open"]),
-                ("ERROR status", issues["errors"]),
-                ("Legal holds", issues["legal_holds"]),
-            ],
-            columns=["Finding", "Count"],
-        )
-        if PLOTLY_AVAILABLE:
-            fig = px.bar(qdata.sort_values("Count"), x="Count", y="Finding", orientation="h", text="Count", color_discrete_sequence=["#c97a17"])
-            fig.update_traces(textposition="outside")
-            fig_layout(fig, 360)
-            fig.update_xaxes(gridcolor="#eef2f5")
-            fig.update_yaxes(title="")
-            st.plotly_chart(fig, width="stretch")
-        else:
-            st.bar_chart(qdata.set_index("Finding"))
-        st.markdown("</div>", unsafe_allow_html=True)
+    results = []
+    for obj_key, obj in SAP_ARCHIVE_OBJECTS.items():
+        # Find total GB for tables in this object
+        obj_tables = obj["tables"]
+        size = df_db[df_db["TABLE_NAME"].isin(obj_tables)]["SIZE_GB"].sum()
+        rows = df_db[df_db["TABLE_NAME"].isin(obj_tables)]["ROWS"].sum()
+        score, priority, reasons = score_archivability(obj_key, size, rows)
+        results.append({
+            "Archive Object": obj_key,
+            "Module": obj["module"],
+            "Description": obj["description"],
+            "Size (GB)": round(size, 1),
+            "Complexity": obj["complexity"],
+            "ILM Capable": "✅" if obj["ilm_capable"] else "—",
+            "OpenText": "✅" if obj["opentext_compatible"] else "—",
+            "Score": score,
+            "Priority": priority,
+            "Retention (yrs)": obj["typical_retention_yrs"],
+            "Prerequisite": obj["prerequisite"],
+        })
 
-    st.markdown('<div class="section"><h2>Inventory by archiving object</h2>', unsafe_allow_html=True)
-    if len(obj_summary):
+    df_results = pd.DataFrame(results).sort_values("Score", ascending=False)
+
+    # Summary metrics
+    high = len(df_results[df_results["Priority"]=="HIGH"])
+    med  = len(df_results[df_results["Priority"]=="MEDIUM"])
+    low  = len(df_results[df_results["Priority"]=="LOW"])
+    ilm_count = df_results[df_results["ILM Capable"]=="✅"].shape[0]
+
+    c1,c2,c3,c4 = st.columns(4)
+    for col, val, lbl, color in [
+        (c1, high,      "High Priority Objects", "#EF4444"),
+        (c2, med,       "Medium Priority",        "#F59E0B"),
+        (c3, low,       "Lower Priority",         "#22C55E"),
+        (c4, ilm_count, "ILM-Capable Objects",    "#1A2B5E"),
+    ]:
+        col.markdown(f"""<div class="metric-card">
+        <div class="val" style="color:{color}">{val}</div>
+        <div class="lbl">{lbl}</div></div>""", unsafe_allow_html=True)
+
+    st.markdown("")
+
+    col_l, col_r = st.columns([2,3])
+    with col_l:
+        st.markdown("##### Priority Matrix")
+        fig = px.scatter(df_results, x="Size (GB)", y="Score",
+                         color="Priority", size="Size (GB)",
+                         hover_data=["Archive Object","Description","Complexity"],
+                         color_discrete_map={"HIGH":"#EF4444","MEDIUM":"#F59E0B","LOW":"#22C55E"},
+                         labels={"Score":"Archivability Score","Size (GB)":"Table Size (GB)"})
+        fig.add_hline(y=70, line_dash="dash", line_color="#EF4444", opacity=0.4)
+        fig.add_hline(y=45, line_dash="dash", line_color="#F59E0B", opacity=0.4)
+        fig.update_layout(height=300, margin=dict(l=0,r=0,t=10,b=0), plot_bgcolor="white")
+        st.plotly_chart(fig, use_container_width=True)
+
+    with col_r:
+        st.markdown("##### Scored Archive Object List")
+        def colour_priority(val):
+            colours = {"HIGH":"background-color:#FEF2F2;color:#991B1B",
+                       "MEDIUM":"background-color:#FFFBEB;color:#92400E",
+                       "LOW":"background-color:#F0FDF4;color:#166534"}
+            return colours.get(val,"")
+        display_cols = ["Archive Object","Module","Description","Size (GB)","Score","Priority","ILM Capable","OpenText"]
         st.dataframe(
-            obj_summary[
-                [
-                    "archiving_object",
-                    "module",
-                    "description",
-                    "records",
-                    "total_size_gb",
-                    "avg_age_years",
-                    "legal_holds",
-                    "duplicates",
-                    "inconsistencies",
-                ]
-            ].rename(
-                columns={
-                    "archiving_object": "Object",
-                    "module": "Module",
-                    "description": "Description",
-                    "records": "Records",
-                    "total_size_gb": "Size (GB)",
-                    "avg_age_years": "Avg age (yrs)",
-                    "legal_holds": "Legal holds",
-                    "duplicates": "Dupes",
-                    "inconsistencies": "Inconsist.",
-                }
-            ),
-            width="stretch",
-            hide_index=True,
+            df_results[display_cols].style
+                .applymap(colour_priority, subset=["Priority"])
+                .background_gradient(subset=["Score"], cmap="Blues", vmin=0, vmax=100),
+            use_container_width=True, height=290, hide_index=True
         )
-    else:
-        st.info("No records match the current filters.")
-    st.markdown("</div>", unsafe_allow_html=True)
 
-    st.markdown('<div class="section"><h2>Full scan results</h2>', unsafe_allow_html=True)
-    scan_cols = [
-        "object_id",
-        "archiving_object",
-        "module",
-        "company_code",
-        "status",
-        "age_days",
-        "days_since_activity",
-        "workflow_completion",
-        "data_quality_score",
-        "anomaly_score",
-        "archivability_score",
-        "priority_score",
-        "size_mb",
-        "recommendation",
-        "rationale",
-    ]
-    st.dataframe(
-        fdf.sort_values("priority_score", ascending=False)[scan_cols].rename(
-            columns={
-                "object_id": "Object ID",
-                "archiving_object": "Archiving Object",
-                "module": "Module",
-                "company_code": "CoCd",
-                "status": "Status",
-                "age_days": "Age (days)",
-                "days_since_activity": "Idle days",
-                "workflow_completion": "Workflow %",
-                "data_quality_score": "DQ Score",
-                "anomaly_score": "Anomaly",
-                "archivability_score": "Archive Score",
-                "priority_score": "Priority",
-                "size_mb": "Size MB",
-                "recommendation": "Action",
-                "rationale": "Rationale",
-            }
-        ),
-        width="stretch",
-        hide_index=True,
-    )
-    st.markdown("</div>", unsafe_allow_html=True)
+    # Phase recommendation
+    st.markdown("##### 📅 Recommended Phasing (Wave Plan)")
+    wave1 = df_results[df_results["Priority"]=="HIGH"][["Archive Object","Description","Size (GB)","Prerequisite"]]
+    wave2 = df_results[df_results["Priority"]=="MEDIUM"][["Archive Object","Description","Size (GB)","Prerequisite"]]
 
+    col_w1, col_w2 = st.columns(2)
+    with col_w1:
+        st.markdown("**Wave 1 — Quick Wins & High Impact**")
+        st.dataframe(wave1, use_container_width=True, height=160, hide_index=True)
+    with col_w2:
+        st.markdown("**Wave 2 — Medium Complexity**")
+        st.dataframe(wave2, use_container_width=True, height=160, hide_index=True)
+
+# ─────────────────────────────────────────────────────────────────────
+# TAB 3: ARCHIVE OBJECT CATALOGUE
+# ─────────────────────────────────────────────────────────────────────
 with tabs[2]:
-    st.markdown('<div class="section"><h2>Cleanup backlog summary</h2>', unsafe_allow_html=True)
-    if len(cleanup_backlog):
-        backlog_summary = (
-            cleanup_backlog.groupby(["issue_type", "owner_group", "effort"], as_index=False)
-            .agg(records=("object_id", "count"), size_gb=("size_mb", lambda s: round(s.sum() / 1024, 2)))
-            .sort_values("records", ascending=False)
-        )
-        c1, c2 = st.columns([1, 1])
-        with c1:
-            st.dataframe(
-                backlog_summary.rename(
-                    columns={
-                        "issue_type": "Issue Type",
-                        "owner_group": "Owner Group",
-                        "effort": "Effort",
-                        "records": "Records",
-                        "size_gb": "Size GB",
-                    }
-                ),
-                width="stretch",
-                hide_index=True,
-            )
-        with c2:
-            if PLOTLY_AVAILABLE:
-                fig = px.bar(backlog_summary, x="records", y="issue_type", color="effort", orientation="h", text="records")
-                fig.update_traces(textposition="outside")
-                fig_layout(fig, 320)
-                fig.update_xaxes(title="Records", gridcolor="#eef2f5")
-                fig.update_yaxes(title="")
-                st.plotly_chart(fig, width="stretch")
-        st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown('<span class="section-badge">🏗️ SAP Archive Object Reference Catalogue</span>', unsafe_allow_html=True)
+    st.caption("Full technical reference for each archive object — equivalent to what an SAP DVM expert would document in the blueprint")
 
-        st.markdown('<div class="section"><h2>Remediation playbook</h2>', unsafe_allow_html=True)
-        playbook = [
-            ("Legal hold", "Confirm hold source, retention authority, and exclusion rules before archive package release."),
-            ("Duplicate", "Create duplicate cluster report, identify golden document, and de-duplicate or mark survivors."),
-            ("Data inconsistency", "Resolve status/reference mismatch, missing dependencies, or failed posting metadata."),
-            ("Open dependency", "Clear document flow, settlement, invoice, delivery, or workflow dependencies."),
-            ("Incomplete workflow", "Close, cancel, or route workflow item to business owner for disposition."),
-        ]
-        for title, body in playbook:
-            st.markdown(f"<div class='playbook'><b>{title}</b><br><span class='hint'>{body}</span></div>", unsafe_allow_html=True)
-        st.markdown("</div>", unsafe_allow_html=True)
+    col_filter1, col_filter2 = st.columns([2,3])
+    with col_filter1:
+        module_filter = st.multiselect("Filter by Module",
+            sorted(set(o["module"] for o in SAP_ARCHIVE_OBJECTS.values())),
+            default=list(set(o["module"] for o in SAP_ARCHIVE_OBJECTS.values())))
+    with col_filter2:
+        complexity_filter = st.multiselect("Filter by Complexity",
+            ["Low","Medium","High"], default=["Low","Medium","High"])
 
-        st.markdown('<div class="section"><h2>Detailed cleanup backlog</h2>', unsafe_allow_html=True)
-        backlog_cols = [
-            "object_id",
-            "archiving_object",
-            "company_code",
-            "status",
-            "issue_type",
-            "owner_group",
-            "effort",
-            "target_sla_days",
-            "priority_score",
-            "size_mb",
-            "suggested_action",
-        ]
-        st.dataframe(
-            cleanup_backlog[backlog_cols].head(300).rename(
-                columns={
-                    "object_id": "Object ID",
-                    "archiving_object": "Archiving Object",
-                    "company_code": "CoCd",
-                    "status": "Status",
-                    "issue_type": "Issue",
-                    "owner_group": "Owner",
-                    "effort": "Effort",
-                    "target_sla_days": "SLA Days",
-                    "priority_score": "Priority",
-                    "size_mb": "Size MB",
-                    "suggested_action": "Suggested Action",
-                }
-            ),
-            width="stretch",
-            hide_index=True,
-        )
-        st.markdown("</div>", unsafe_allow_html=True)
-    else:
-        st.success("No cleanup backlog for the current filters.")
-        st.markdown("</div>", unsafe_allow_html=True)
+    for obj_key, obj in SAP_ARCHIVE_OBJECTS.items():
+        if obj["module"] not in module_filter: continue
+        if obj["complexity"] not in complexity_filter: continue
 
+        with st.expander(f"**{obj_key}** — {obj['description']}  |  Module: {obj['module']}  |  Complexity: {obj['complexity']}"):
+            col1, col2, col3 = st.columns(3)
+            col1.markdown(f"**Retention:** {obj['typical_retention_yrs']} years")
+            col1.markdown(f"**Prerequisite:** {obj['prerequisite']}")
+            col1.markdown(f"**Verify in:** `{obj['tcode_check']}`")
+            col2.markdown(f"**ILM Capable:** {'✅ Yes' if obj['ilm_capable'] else '❌ No'}")
+            col2.markdown(f"**OpenText Compatible:** {'✅ Yes' if obj['opentext_compatible'] else '❌ No'}")
+            col2.markdown(f"**Tables:** `{'`, `'.join(obj['tables'])}`")
+            col3.markdown(f"**Notes:** {obj['notes']}")
+
+            if has_opentext:
+                if obj["ilm_capable"] and ilm_licensed:
+                    st.markdown("""<div class="opentext-box">
+                    <h4>🔗 ILM + OpenText Integration Path</h4>
+                    <p style="color:#D8E6F3;font-size:0.85rem;margin:0">
+                    This object supports ILM-ADK file generation. Archives will be written to OpenText Archive Center 
+                    via the WebDAV/ILM 3.1 interface with embedded retention metadata. Retention period will be 
+                    enforced by OpenText — legal hold and defensible deletion are supported.</p>
+                    </div>""", unsafe_allow_html=True)
+                elif obj["opentext_compatible"]:
+                    st.markdown("""<div class="opentext-box">
+                    <h4>🔗 OpenText via ArchiveLink</h4>
+                    <p style="color:#D8E6F3;font-size:0.85rem;margin:0">
+                    ADK files will be written to OpenText Archive Center via SAP ArchiveLink. 
+                    No infrastructure change required. Enable ILM later to upgrade to retention-managed storage 
+                    using the SAP ILM File Converter — no data loss.</p>
+                    </div>""", unsafe_allow_html=True)
+
+# ─────────────────────────────────────────────────────────────────────
+# TAB 4: AI ARCHIVING ASSISTANT
+# ─────────────────────────────────────────────────────────────────────
 with tabs[3]:
-    pcol1, pcol2 = st.columns([0.35, 0.65])
-    with pcol1:
-        st.markdown('<div class="section"><h2>Package planning controls</h2>', unsafe_allow_html=True)
-        max_package_gb = st.slider("Max package size (GB)", 0.25, 10.0, 2.5, step=0.25)
-        max_records = st.slider("Max records per package", 50, 1000, 250, step=50)
-        st.caption("Packages are sequenced by object, priority, and estimated footprint.")
-        st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown('<span class="section-badge">🤖 AI Archiving Assistant — Powered by Claude</span>', unsafe_allow_html=True)
+    st.caption("Ask any SAP data archiving question — ILM, OpenText, SARA, archive objects, retention, compliance")
 
-    package_summary, package_detail = build_archive_packages(fdf, max_package_gb, max_records)
-    with pcol2:
-        st.markdown('<div class="section"><h2>Archive package KPIs</h2>', unsafe_allow_html=True)
-        render_native_metrics(
-            [
-                {"label": "Archive packages", "value": f"{len(package_summary):,}", "delta": "Generated"},
-                {"label": "Packaged records", "value": f"{len(package_detail):,}", "delta": f"{gb(package_detail['size_mb']) if len(package_detail) else 0:,} GB"},
-                {"label": "Avg runtime", "value": f"{round(package_summary['estimated_runtime_min'].mean(), 0):.0f} min" if len(package_summary) else "0 min", "delta": "Estimate"},
-                {"label": "Largest package", "value": f"{package_summary['size_gb'].max():.2f} GB" if len(package_summary) else "0 GB", "delta": "Max"},
-                {"label": "Recoverable", "value": f"{archive_size_gb:,} GB", "delta": "Ready"},
-            ]
-        )
-        st.markdown("</div>", unsafe_allow_html=True)
+    # System prompt with full SAP context
+    SYSTEM_PROMPT = f"""You are an expert SAP Data Volume Management and ILM consultant with 15+ years of experience.
+You work for Capgemini and Auritas on a joint ECC data archival engagement.
 
-    st.markdown('<div class="section"><h2>Archive run packages</h2>', unsafe_allow_html=True)
-    if len(package_summary):
-        c1, c2 = st.columns([1, 1])
-        with c1:
-            st.dataframe(
-                package_summary[
-                    [
-                        "sequence",
-                        "archive_package",
-                        "archiving_object",
-                        "module",
-                        "records",
-                        "size_gb",
-                        "avg_score",
-                        "estimated_runtime_min",
-                        "oldest_days",
-                    ]
-                ].rename(
-                    columns={
-                        "sequence": "Seq",
-                        "archive_package": "Package",
-                        "archiving_object": "Object",
-                        "module": "Module",
-                        "records": "Records",
-                        "size_gb": "Size GB",
-                        "avg_score": "Avg Score",
-                        "estimated_runtime_min": "Runtime Min",
-                        "oldest_days": "Oldest Age Days",
-                    }
-                ),
-                width="stretch",
-                hide_index=True,
-            )
-        with c2:
-            if PLOTLY_AVAILABLE:
-                fig = px.bar(package_summary, x="archive_package", y="size_gb", color="archiving_object", text="records")
-                fig_layout(fig, 390)
-                fig.update_xaxes(title="", tickangle=-35)
-                fig.update_yaxes(title="Size GB", gridcolor="#eef2f5")
-                st.plotly_chart(fig, width="stretch")
-        st.markdown("</div>", unsafe_allow_html=True)
+CURRENT CLIENT CONTEXT:
+- SAP System: {sap_system}
+- Has OpenText Archive Center: {has_opentext}
+- SAP ILM Licensed: {ilm_licensed}
+- Client: {client_name}
 
-        st.markdown('<div class="section"><h2>Pilot package recommendation</h2>', unsafe_allow_html=True)
-        pilot = package_summary.sort_values(["avg_score", "size_gb"], ascending=[False, True]).head(1)
-        if len(pilot):
-            r = pilot.iloc[0]
-            st.success(
-                f"Recommended pilot: {r['archive_package']} ({int(r['records']):,} records, {r['size_gb']} GB, average score {r['avg_score']}). "
-                "Use this as a low-risk archive write/read validation package before scaling."
-            )
-        st.markdown("</div>", unsafe_allow_html=True)
-    else:
-        st.info("No ARCHIVE candidates available for package planning under the current filters.")
-        st.markdown("</div>", unsafe_allow_html=True)
+YOUR EXPERTISE INCLUDES:
+- SAP Data Archiving (SARA, AS, TAANA, DB02, DBACOCKPIT)
+- SAP ILM (Information Lifecycle Management) — retention policies, legal hold, WebDAV ILM 3.1
+- OpenText Archive Center integration via SAP ArchiveLink and ILM 3.1 protocol
+- All major SAP archiving objects (FI_DOCUMNT, MM_MATBEL, SD_VBAK, CO_CCTR_EP, etc.)
+- Archive object prerequisites, residence times, TCODE verification
+- ADK file format, ILM-ADK conversion, Retention Warehouse
+- S/4HANA migration readiness through data volume management
+- GDPR/regulatory compliance for data retention and deletion
+- Blueprint methodology, workshop facilitation, sizing and estimation
 
-with tabs[4]:
-    st.markdown('<div class="section"><h2>Deletion / purge readiness rules</h2>', unsafe_allow_html=True)
-    st.warning(
-        "Client-safe rule: deletion is only considered after successful archive write/read validation, retention approval, "
-        "and legal/compliance confirmation. This prototype labels deletion readiness; it does not delete anything."
-    )
-    retention_buffer = st.slider(
-        "Extra residence buffer before delete/purge eligibility (months)",
-        0,
-        60,
-        12,
-        step=6,
-    )
-    deletion_df = add_deletion_readiness(fdf, retention_buffer)
-    delete_ready = deletion_df[
-        deletion_df["deletion_readiness"].eq("DELETE_AFTER_ARCHIVE_VALIDATION")
+KNOWN ARCHIVE OBJECTS IN SCOPE: {', '.join(SAP_ARCHIVE_OBJECTS.keys())}
+
+STORAGE ARCHITECTURE:
+{f"OpenText is integrated via SAP ArchiveLink. {('ILM-ADK files with retention metadata will be written via WebDAV/ILM 3.1 interface.' if ilm_licensed else 'Currently using standard ADK files. ILM can be activated later with no data loss using the SAP ILM File Converter.')}" if has_opentext else "No content repository configured yet — recommend OpenText or equivalent ILM-certified storage."}
+
+RESPONSE STYLE:
+- Be specific, technical, and actionable — like a senior consultant in a blueprint workshop
+- Reference exact SAP transaction codes, table names, and configuration steps
+- When discussing archive objects, always mention prerequisites and residence time
+- Flag regulatory implications for financial archiving (10-year retention for FI documents)
+- Keep responses focused and consultant-grade — no generic advice
+- Format with clear sections and bullet points where appropriate"""
+
+    # Chat state
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = []
+
+    # Suggested questions
+    st.markdown("**💡 Suggested questions:**")
+    suggestions = [
+        "What are the prerequisites to archive FI_DOCUMNT and how long should I set the residence time?",
+        "How does OpenText integrate with SAP ILM using the WebDAV ILM 3.1 interface?",
+        "What's the difference between an ADK file and an ILM-ADK file and can I convert existing archives?",
+        "Which archive objects should I tackle first for maximum DB reduction with minimum risk?",
+        "How do I check the archivability status of MM_MATBEL in SARA before running the write program?",
+        "What happens to archived data during an S/4HANA migration and how should I prepare?",
+        "How do I configure legal hold in SAP ILM and what transactions are involved?",
     ]
-    archive_only = deletion_df[
-        deletion_df["deletion_readiness"].eq("ARCHIVE_ONLY_RETAIN_COPY")
-    ]
-    not_eligible = deletion_df[
-        deletion_df["deletion_readiness"].eq("NOT_DELETE_ELIGIBLE")
-    ]
-    review_delete = deletion_df[
-        deletion_df["deletion_readiness"].eq("REVIEW_BEFORE_DELETE")
-    ]
-    render_native_metrics(
-        [
-            {"label": "Delete after validation", "value": f"{len(delete_ready):,}", "delta": f"{gb(delete_ready['size_mb']) if len(delete_ready) else 0:,} GB"},
-            {"label": "Archive only", "value": f"{len(archive_only):,}", "delta": "Retain archived copy"},
-            {"label": "Review before delete", "value": f"{len(review_delete):,}", "delta": "Business/legal review"},
-            {"label": "Not delete eligible", "value": f"{len(not_eligible):,}", "delta": "Blocked or not ready"},
-            {"label": "Buffer", "value": f"{retention_buffer} mo", "delta": "Beyond residence"},
-        ]
-    )
+    cols = st.columns(2)
+    for i, q in enumerate(suggestions):
+        if cols[i%2].button(q, key=f"sugg_{i}", use_container_width=True):
+            st.session_state.pending_question = q
 
-    c1, c2 = st.columns([1, 1])
-    with c1:
-        st.markdown("**Deletion-readiness rule gates**")
-        gates = pd.DataFrame(
-            [
-                ("Archive recommendation", "Must already be ARCHIVE-ready"),
-                ("Extra residence buffer", f"Residence must exceed object minimum by {retention_buffer} months"),
-                ("Legal hold", "Must not be under legal hold"),
-                ("Dependencies", "Must have no open downstream dependencies"),
-                ("Data quality", "Data quality score must be ≥ 0.85"),
-                ("Workflow", "Workflow completion must be ≥ 98%"),
-                ("Activity", "No activity for at least 540 days"),
-                ("Anomaly risk", "Anomaly score must be ≤ 0.35"),
-                ("Validation", "Delete only after archive write/read validation and approval"),
-            ],
-            columns=["Gate", "Rule"],
-        )
-        st.dataframe(gates, width="stretch", hide_index=True)
-    with c2:
-        readiness = (
-            deletion_df["deletion_readiness"]
-            .value_counts()
-            .rename_axis("Readiness")
-            .reset_index(name="Records")
-        )
-        if PLOTLY_AVAILABLE and len(readiness):
-            fig = px.bar(
-                readiness,
-                x="Records",
-                y="Readiness",
-                orientation="h",
-                text="Records",
-                color="Readiness",
-                color_discrete_map={
-                    "DELETE_AFTER_ARCHIVE_VALIDATION": "#2f8a3e",
-                    "ARCHIVE_ONLY_RETAIN_COPY": PRIMARY,
-                    "REVIEW_BEFORE_DELETE": "#c97a17",
-                    "NOT_DELETE_ELIGIBLE": "#4a5c66",
-                },
-            )
-            fig.update_traces(textposition="outside")
-            fig_layout(fig, 360)
-            fig.update_xaxes(gridcolor="#eef2f5")
-            fig.update_yaxes(title="")
-            st.plotly_chart(fig, width="stretch")
+    st.markdown("---")
+
+    # Display chat history
+    for msg in st.session_state.chat_history:
+        if msg["role"] == "user":
+            st.markdown(f'<div class="chat-msg-user">👤 <strong>You:</strong><br>{msg["content"]}</div>',
+                        unsafe_allow_html=True)
         else:
-            st.bar_chart(readiness.set_index("Readiness"))
-    st.markdown("</div>", unsafe_allow_html=True)
+            st.markdown(f'<div class="chat-msg-ai">🤖 <strong>SAP AI Assistant:</strong><br>{msg["content"]}</div>',
+                        unsafe_allow_html=True)
 
-    st.markdown('<div class="section"><h2>Deletion candidate worklist</h2>', unsafe_allow_html=True)
-    deletion_cols = [
-        "object_id",
-        "archiving_object",
-        "company_code",
-        "status",
-        "residence_months",
-        "min_residence_months",
-        "residence_surplus_months",
-        "workflow_completion",
-        "data_quality_score",
-        "anomaly_score",
-        "size_mb",
-        "deletion_readiness",
-        "deletion_rationale",
-    ]
-    st.dataframe(
-        deletion_df.sort_values(
-            ["deletion_readiness", "residence_surplus_months", "size_mb"],
-            ascending=[True, False, False],
-        )[deletion_cols].rename(
-            columns={
-                "object_id": "Object ID",
-                "archiving_object": "Archiving Object",
-                "company_code": "CoCd",
-                "status": "Status",
-                "residence_months": "Residence Mo",
-                "min_residence_months": "Min Residence",
-                "residence_surplus_months": "Surplus Mo",
-                "workflow_completion": "Workflow %",
-                "data_quality_score": "DQ Score",
-                "anomaly_score": "Anomaly",
-                "size_mb": "Size MB",
-                "deletion_readiness": "Deletion Readiness",
-                "deletion_rationale": "Rationale",
-            }
-        ),
-        width="stretch",
-        hide_index=True,
-    )
-    st.markdown("</div>", unsafe_allow_html=True)
+    # Input
+    user_input = st.chat_input("Ask your SAP archiving question...")
+    if "pending_question" in st.session_state:
+        user_input = st.session_state.pending_question
+        del st.session_state.pending_question
 
-with tabs[5]:
-    st.markdown('<div class="section"><h2>Object drilldown</h2>', unsafe_allow_html=True)
-    ids_avail = (
-        fdf.sort_values("priority_score", ascending=False)["object_id"].drop_duplicates().head(800).tolist()
-        if len(fdf)
-        else []
-    )
-    if ids_avail:
-        pick = st.selectbox("Select an object to inspect", ids_avail, index=0)
-        rec = fdf[fdf["object_id"] == pick].iloc[0]
-        badge_color = STATUS_COLORS.get(rec["recommendation"], "#888")
-        st.markdown(
-            f"""
-            <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin: 4px 0 14px 0;">
-              <div style="font-family:'JetBrains Mono', monospace; font-size:18px; font-weight:700;">{rec['object_id']}</div>
-              <span class="badge" style="background:{badge_color}; color:#fff;">{rec['recommendation']}</span>
-              <span class="badge" style="background:#eef3f6; color:{INK};">{rec['archiving_object']}</span>
-              <span class="badge" style="background:#eef3f6; color:{INK};">{rec['module']}</span>
-              <span class="hint">{rec['rationale']}</span>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        dcol1, dcol2, dcol3, dcol4, dcol5 = st.columns(5)
-        dcol1.metric("Archivability", f"{rec['archivability_score']:.0f}")
-        dcol2.metric("Priority", f"{rec['priority_score']:.0f}")
-        dcol3.metric("Anomaly", f"{rec['anomaly_score']:.2f}")
-        dcol4.metric("Size", f"{rec['size_mb']:.1f} MB")
-        dcol5.metric("Workflow", f"{rec['workflow_completion']*100:.0f}%")
+    if user_input:
+        st.session_state.chat_history.append({"role":"user","content":user_input})
 
-        d1, d2 = st.columns([0.48, 0.52])
-        with d1:
-            st.markdown("**Record attributes**")
-            attrs = pd.DataFrame(
-                [
-                    ("Object", rec["archiving_object"]),
-                    ("Table", rec["table"]),
-                    ("Company Code", rec["company_code"]),
-                    ("Plant", rec["plant"] or "n/a"),
-                    ("Status", rec["status"]),
-                    ("Created On", str(rec["created_on"].date())),
-                    ("Last Activity", str(rec["last_activity_on"].date())),
-                    ("Residence", f"{rec['residence_months']} mo / {rec['min_residence_months']}+ required"),
-                    ("Failed Rules", rec["failed_rules"]),
-                ],
-                columns=["Attribute", "Value"],
-            )
-            st.dataframe(attrs, width="stretch", hide_index=True)
-        with d2:
-            st.markdown("**Rule evaluation**")
-            rule_rows = []
-            for key, _, label in RULES:
-                passed = bool(rec[f"rule_{key}"])
-                rule_rows.append(
-                    {
-                        "Rule": label,
-                        "Weight": RULE_WEIGHTS[key],
-                        "Passed": "PASS" if passed else "FAIL",
-                        "Contribution": RULE_WEIGHTS[key] if passed else 0,
-                    }
+        # Build messages for Claude API
+        messages = []
+        for m in st.session_state.chat_history:
+            messages.append({"role": m["role"], "content": m["content"]})
+
+        with st.spinner("Consulting SAP knowledge base..."):
+            try:
+                resp = requests.post(
+                    "https://api.anthropic.com/v1/messages",
+                    headers={"Content-Type":"application/json"},
+                    json={
+                        "model": "claude-sonnet-4-20250514",
+                        "max_tokens": 1000,
+                        "system": SYSTEM_PROMPT,
+                        "messages": messages
+                    },
+                    timeout=30
                 )
-            st.dataframe(pd.DataFrame(rule_rows), width="stretch", hide_index=True)
+                if resp.status_code == 200:
+                    answer = resp.json()["content"][0]["text"]
+                else:
+                    answer = f"⚠️ API error {resp.status_code}. Please check your API key in Streamlit secrets."
+            except Exception as e:
+                answer = f"⚠️ Connection error: {e}. Ensure the Anthropic API key is set in Streamlit secrets as `ANTHROPIC_API_KEY`."
 
-        flags = []
-        if rec["legal_hold"]:
-            flags.append("LEGAL HOLD")
-        if rec["has_open_dependencies"]:
-            flags.append("OPEN DEPENDENCIES")
-        if rec["duplicate_flag"]:
-            flags.append("DUPLICATE")
-        if rec["inconsistency_flag"]:
-            flags.append("INCONSISTENT")
-        if flags:
-            st.warning("Blocking / cleanup flags: " + ", ".join(flags))
-        else:
-            st.success("No hard blockers detected for this object.")
-    else:
-        st.info("No records to drill into.")
-    st.markdown("</div>", unsafe_allow_html=True)
+        st.session_state.chat_history.append({"role":"assistant","content":answer})
+        st.rerun()
 
-with tabs[6]:
-    st.markdown('<div class="section"><h2>What-if archivability rules</h2>', unsafe_allow_html=True)
-    w1, w2, w3, w4 = st.columns(4)
-    residence_buffer = w1.slider("Residence buffer months", -12, 24, 0, step=3)
-    workflow_threshold = w2.slider("Workflow completion threshold", 0.70, 1.00, 0.95, step=0.01)
-    dq_threshold = w3.slider("Data quality threshold", 0.40, 0.95, 0.70, step=0.05)
-    idle_months = w4.slider("No-activity threshold months", 3, 36, 12, step=3)
-    scenario = build_scenario(fdf, residence_buffer, workflow_threshold, dq_threshold, idle_months)
-    scenario_ready = int(scenario["scenario_archive_ready"].sum()) if len(scenario) else 0
-    current_ready = archive_n
-    delta_ready = scenario_ready - current_ready
-    scenario_gb = gb(scenario.loc[scenario["scenario_archive_ready"], "size_mb"]) if len(scenario) else 0
+    if st.button("🗑️ Clear conversation", type="secondary"):
+        st.session_state.chat_history = []
+        st.rerun()
 
-    render_native_metrics(
-        [
-            {"label": "Current archive-ready", "value": f"{current_ready:,}", "delta": "Baseline"},
-            {"label": "Scenario archive-ready", "value": f"{scenario_ready:,}", "delta": f"{scenario_gb:,} GB"},
-            {"label": "Ready delta", "value": f"{delta_ready:+,}", "delta": "vs baseline"},
-            {"label": "Workflow threshold", "value": f"{workflow_threshold*100:.0f}%", "delta": "Policy"},
-            {"label": "Residence buffer", "value": f"{residence_buffer:+} mo", "delta": "Policy"},
-        ]
-    )
+# ─────────────────────────────────────────────────────────────────────
+# TAB 5: REMEDIATION PLAYBOOK
+# ─────────────────────────────────────────────────────────────────────
+with tabs[4]:
+    st.markdown('<span class="section-badge">📋 Remediation Playbook</span>', unsafe_allow_html=True)
+    st.caption("Step-by-step archiving guide per object — generated from blueprint workshop findings")
 
-    if len(scenario):
-        comparison = (
-            scenario.groupby("archiving_object")
-            .agg(
-                records=("object_id", "count"),
-                current_ready=("recommendation", lambda s: int((s == "ARCHIVE").sum())),
-                scenario_ready=("scenario_archive_ready", "sum"),
-                scenario_gb=("size_mb", lambda s: 0),
-            )
-            .reset_index()
-        )
-        scenario_gb_by_obj = (
-            scenario[scenario["scenario_archive_ready"]]
-            .groupby("archiving_object")["size_mb"]
-            .sum()
-            .div(1024)
-            .round(2)
-        )
-        comparison["scenario_gb"] = comparison["archiving_object"].map(scenario_gb_by_obj).fillna(0)
-        comparison["delta"] = comparison["scenario_ready"] - comparison["current_ready"]
+    selected_obj = st.selectbox("Select Archive Object",
+        list(SAP_ARCHIVE_OBJECTS.keys()),
+        format_func=lambda k: f"{k} — {SAP_ARCHIVE_OBJECTS[k]['description']}")
 
-        c1, c2 = st.columns([1, 1])
-        with c1:
-            st.dataframe(
-                comparison.rename(
-                    columns={
-                        "archiving_object": "Object",
-                        "records": "Records",
-                        "current_ready": "Current Ready",
-                        "scenario_ready": "Scenario Ready",
-                        "scenario_gb": "Scenario GB",
-                        "delta": "Delta",
-                    }
-                ),
-                width="stretch",
-                hide_index=True,
-            )
-        with c2:
-            if PLOTLY_AVAILABLE:
-                fig = go.Figure()
-                fig.add_bar(name="Current", x=comparison["archiving_object"], y=comparison["current_ready"], marker_color=PRIMARY)
-                fig.add_bar(name="Scenario", x=comparison["archiving_object"], y=comparison["scenario_ready"], marker_color="#c97a17")
-                fig_layout(fig, 350)
-                fig.update_layout(barmode="group")
-                fig.update_xaxes(title="", tickangle=-25)
-                fig.update_yaxes(title="Records", gridcolor="#eef2f5")
-                st.plotly_chart(fig, width="stretch")
-    st.markdown("</div>", unsafe_allow_html=True)
+    obj = SAP_ARCHIVE_OBJECTS[selected_obj]
+    df_obj = df_db[df_db["TABLE_NAME"].isin(obj["tables"])]
+    total_size = df_obj["SIZE_GB"].sum()
+    total_rows = df_obj["ROWS"].sum()
+    score, priority, reasons = score_archivability(selected_obj, total_size, total_rows)
 
-with tabs[7]:
-    st.markdown('<div class="section"><h2>Exports and client handoff</h2>', unsafe_allow_html=True)
-    ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
-    package_summary, package_detail = build_archive_packages(fdf, 2.5, 250)
-    deletion_export = add_deletion_readiness(fdf)
-    report_text = client_report(fdf, package_summary, cleanup_backlog, issues, obj_summary)
+    col1,col2,col3,col4 = st.columns(4)
+    col1.metric("Archive Object",  selected_obj)
+    col2.metric("Module",          obj["module"])
+    col3.metric("Est. Table Size", f"{total_size:.1f} GB")
+    col4.metric("Priority Score",  f"{score}/100")
 
-    csv_buf = io.StringIO()
-    fdf.to_csv(csv_buf, index=False)
-    backlog_buf = io.StringIO()
-    cleanup_backlog.to_csv(backlog_buf, index=False)
-    package_buf = io.StringIO()
-    package_summary.to_csv(package_buf, index=False)
-    deletion_buf = io.StringIO()
-    deletion_export.to_csv(deletion_buf, index=False)
-
-    e1, e2, e3, e4, e5 = st.columns(5)
-    with e1:
-        st.download_button(
-            "Download scan results CSV",
-            data=csv_buf.getvalue(),
-            file_name=f"sap_archiving_scan_results_{ts}.csv",
-            mime="text/csv",
-            width="stretch",
-        )
-    with e2:
-        st.download_button(
-            "Download cleanup backlog CSV",
-            data=backlog_buf.getvalue(),
-            file_name=f"sap_archiving_cleanup_backlog_{ts}.csv",
-            mime="text/csv",
-            width="stretch",
-        )
-    with e3:
-        st.download_button(
-            "Download archive packages CSV",
-            data=package_buf.getvalue(),
-            file_name=f"sap_archiving_packages_{ts}.csv",
-            mime="text/csv",
-            width="stretch",
-        )
-    with e4:
-        st.download_button(
-            "Download deletion rules CSV",
-            data=deletion_buf.getvalue(),
-            file_name=f"sap_archiving_deletion_readiness_{ts}.csv",
-            mime="text/csv",
-            width="stretch",
-        )
-    with e5:
-        st.download_button(
-            "Download client report MD",
-            data=report_text,
-            file_name=f"sap_archiving_client_report_{ts}.md",
-            mime="text/markdown",
-            width="stretch",
-        )
-
-    st.markdown("**Client-demo talking points**")
-    st.markdown(
-        """
-        - Show the Executive Cockpit first to frame value: storage reclaimed, blockers, and archive readiness.
-        - Use Scan Results to explain how rules and anomaly scoring identify risk.
-        - Use Cleanup Backlog to convert findings into remediation owners and action plans.
-        - Use Archive Planner to demonstrate package sequencing for SAP ADK/ILM archive runs.
-        - Use What-if Rules to show how policy changes affect archive readiness.
-        """
-    )
-    st.markdown("</div>", unsafe_allow_html=True)
-
-st.markdown(
-    f"""
-    <div class="footer">
-      Prototype • All data synthetic • No SAP connection required •
-      Anomaly engine: <b>{ml_label}</b> • Charts: <b>{chart_label}</b>
+    st.markdown(f"""
+    <div class="{'risk-HIGH' if priority=='HIGH' else 'risk-MEDIUM' if priority=='MEDIUM' else 'risk-LOW'}">
+    <strong>Priority: {priority}</strong> &nbsp;|&nbsp; {' · '.join(reasons)}
     </div>
-    """,
-    unsafe_allow_html=True,
-)
+    """, unsafe_allow_html=True)
+
+    st.markdown("---")
+    st.markdown("#### 📋 Step-by-Step Archiving Playbook")
+
+    steps = [
+        ("1️⃣ Verify Prerequisites", f"""
+- Check completion status using `{obj['tcode_check']}`
+- Confirm: **{obj['prerequisite']}**
+- Run residence time analysis in `SARA` → Archive Object: `{selected_obj}` → Residence time check
+- Ensure all dependent business processes are closed
+        """),
+        ("2️⃣ Configure Archive Object in SARA", f"""
+- Transaction: `SARA` → Enter object `{selected_obj}`
+- Set residence time: **{obj['typical_retention_yrs']} years** (adjust per retention policy)
+- Configure variant for Write program
+- Set up logical file path (check `FILE` transaction)
+- {'Configure ILM retention category and storage class' if obj['ilm_capable'] and ilm_licensed else 'Configure ArchiveLink content repository (OpenText Archive Center)' if has_opentext else 'Configure archive file path (local or network)'}
+        """),
+        ("3️⃣ Run Preprocessing / Check Program", f"""
+- SARA → `Preprocessing` or `Check` button
+- Review log — resolve all errors before Write run
+- Expected tables: `{'`, `'.join(obj['tables'])}`
+- Note record counts per table — document as baseline
+        """),
+        ("4️⃣ Execute Write Program (DEV first)", f"""
+- SARA → `Write` → Run in **test mode first** (no actual archiving)
+- Review test log — check object counts match expectations
+- Execute production Write run in DEV environment
+- Archive files written to: {'OpenText Archive Center via ' + ('ILM 3.1 WebDAV interface (ILM-ADK format)' if ilm_licensed else 'SAP ArchiveLink (ADK format)') if has_opentext else 'Local archive file path'}
+        """),
+        ("5️⃣ Run Delete Program", f"""
+- SARA → `Delete` → run AFTER Write program completes successfully
+- Verify Delete log — check records removed from primary tables
+- Spot-check: use `{obj['tcode_check']}` to confirm archived documents are accessible via archive
+- **Do NOT run Delete if Write log shows errors**
+        """),
+        ("6️⃣ Verify Retrieval (UAT)", f"""
+- Test retrieval from archive in `{obj['tcode_check']}`
+- Confirm archived documents display correctly via ArchiveLink viewer
+- Test search via ILM Workbench (`IRMPOL`) if ILM enabled
+- Document retrieval times and archive file locations
+        """),
+        ("7️⃣ Transport to QA & Production", f"""
+- Transport SARA configuration via standard SAP transport (`SE01` / `STMS`)
+- Re-run check/write/delete cycle in QA environment
+- Get business sign-off before production run
+- Schedule regular archiving jobs via `SM36` / `SM37`
+        """),
+    ]
+
+    for title, content in steps:
+        with st.expander(title):
+            st.markdown(content)
+
+    if has_opentext:
+        st.markdown("---")
+        st.markdown("#### 🔗 OpenText Integration Checklist")
+        checklist_items = [
+            ("Content repository configured in SAP (`OAC0`)", True),
+            ("ArchiveLink connection tested (`OACT`)", True),
+            ("Archive object linked to content repository (`OAC3`)", True),
+            ("Retrieval tested from SAP GUI" if not ilm_licensed else "ILM storage category configured (`IRMPSCAT`)", True),
+            ("WebDAV/ILM 3.1 interface configured" if ilm_licensed else "ADK file path configured in `FILE` transaction", True),
+            ("Legal hold process tested in ILM Workbench" if ilm_licensed else "ADK→ILM conversion planned for future ILM activation", ilm_licensed),
+        ]
+        for item, done in checklist_items:
+            st.checkbox(item, value=done, disabled=True)
+
+# ─────────────────────────────────────────────────────────────────────
+# TAB 6: CONTEXT & METHODOLOGY
+# ─────────────────────────────────────────────────────────────────────
+with tabs[5]:
+    st.markdown('<span class="section-badge">ℹ️ Context, Methodology & Integration Architecture</span>', unsafe_allow_html=True)
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("#### 📐 Methodology: How This Works")
+        st.markdown("""
+**Phase 1 — Analysis & Strategy (8 weeks)**
+
+This tool supports the blueprint workshop process:
+1. **DB Sizing** — import your DB02 export to size the opportunity
+2. **Object Scoring** — AI-driven prioritisation against your landscape
+3. **Prerequisite Check** — per-object readiness assessment
+4. **Wave Planning** — recommended sequencing to minimise risk
+
+**Phase 2 — Execution**
+
+- ILM configuration (if licensed)
+- Archive object configuration in DEV → QA → PRD
+- Testing with business validation
+- Cutover and hypercare
+        """)
+
+        st.markdown("#### 📥 How to Export Data from SAP")
+        with st.expander("DB02 / DBACOCKPIT Export"):
+            st.code("""
+-- In SAP:
+Transaction: DB02 (for Oracle/HANA) or DBACOCKPIT
+→ Space → Tables / Indexes
+→ Sort by Size descending
+→ Export to local file (CSV)
+
+-- File should have columns:
+TABLE_NAME, SIZE_GB (or SIZE in MB), ROWS
+            """, language="sql")
+
+        with st.expander("TAANA — Table Analysis Export"):
+            st.code("""
+-- Transaction: TAANA
+-- Run table analysis for all tables or specific selection
+-- Export results to spreadsheet
+-- Columns: TABLE_NAME, ROWS, SIZE_MB, LAST_CHANGE
+            """, language="sql")
+
+        with st.expander("SE16 — Direct Table Query"):
+            st.code("""
+-- Transaction: SE16 or SE16N
+-- Table: DBSTATC or DBSTATTORA (Oracle)
+           or M_TABLE_USED_MEMORY_VIEW (HANA)
+-- Export to local file
+            """, language="sql")
+
+    with col2:
+        st.markdown("#### 🏗️ Integration Architecture")
+        st.markdown(f"""
+**Your Current Setup:**
+- SAP System: **{sap_system}**
+- Content Repository: **{'OpenText Archive Center ✅' if has_opentext else 'Not configured'}**
+- ILM Status: **{'Active ✅' if ilm_licensed else 'Not licensed — using standard ADK'}**
+
+**Integration Flow:**
+```
+SAP ECC
+  ↓ SARA (archive write program)
+  ↓ ADK File generation
+  {'↓ ILM-ADK (retention metadata embedded)' if ilm_licensed else '↓ Standard ADK format'}
+  ↓ {'WebDAV / ILM 3.1 interface' if ilm_licensed else 'SAP ArchiveLink (BC-ArchiveLink)'}
+  ↓ OpenText Archive Center
+  ↓ Archive Storage Services
+  ↓ NAS / Long-term Storage
+```
+
+**Future Path (if ILM activated later):**
+```
+Existing ADK files in OpenText
+  ↓ SAP ILM File Converter
+  ↓ ILM-ADK format (no data loss)
+  ↓ Load to ILM Retention Warehouse
+  ↓ Full retention governance + GDPR compliance
+```
+        """)
+
+        st.markdown("#### 🔑 Key SAP Transactions Reference")
+        tcodes = {
+            "SARA":    "Archive Administration — main entry point",
+            "AS":      "Archive Information System — retrieve archived data",
+            "TAANA":   "Table Analysis — size and age distribution",
+            "DB02":    "Database Performance Monitor — table sizes",
+            "SE16":    "Data Browser — direct table access",
+            "OAC0":    "Content Repositories — ArchiveLink config",
+            "OACT":    "Test ArchiveLink connection to content server",
+            "OAC3":    "Link archive objects to content repositories",
+            "FILE":    "Logical File Paths — archive file configuration",
+            "SM36/37": "Job scheduling and monitoring",
+            "IRMPOL":  "ILM Policy Management (if ILM licensed)",
+            "IRMPSCAT":"ILM Storage Categories",
+            "SFW5":    "Switch Framework — activate ILM business function",
+        }
+        for tc, desc in tcodes.items():
+            st.markdown(f"- `{tc}` — {desc}")
+
+    st.markdown("---")
+    st.markdown("""
+    <div style="background:#1A2B5E;border-radius:8px;padding:1rem;color:white;text-align:center">
+    <p style="margin:0;font-size:0.8rem">
+    🔒 <strong>Confidential — Internal Use</strong> &nbsp;|&nbsp; 
+    Auritas × Capgemini Joint Engagement &nbsp;|&nbsp; 
+    Built with Claude AI (Anthropic) &nbsp;|&nbsp;
+    Not for distribution outside the engagement team
+    </p>
+    </div>
+    """, unsafe_allow_html=True)
