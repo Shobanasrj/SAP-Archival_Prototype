@@ -192,9 +192,9 @@ def generate_db02_data():
 
 def generate_growth_data():
     """12-month DB growth simulation"""
-    months = pd.date_range(end=datetime.now(), periods=12, freq="ME")
+    months = list(pd.date_range(end=datetime.now(), periods=12, freq="MS"))
     base = 3800
-    sizes = [base + i * 45 + np.random.randint(-10, 25) for i in range(12)]
+    sizes = [base + i * 45 + int(np.random.randint(-10, 25)) for i in range(len(months))]
     return pd.DataFrame({"Month": months, "DB_Size_GB": sizes})
 
 def score_archivability(obj_key, size_gb, rows, manual_overrides=None):
@@ -225,7 +225,7 @@ with st.sidebar:
     st.markdown("""
     <div style="background:linear-gradient(135deg,#1A2B5E,#2E86C1);padding:1rem;border-radius:8px;margin-bottom:1rem">
     <h3 style="color:white;margin:0;font-size:1rem">🗄️ SAP Archival AI Assistant</h3>
-    <p style="color:#D8E6F3;margin:0.3rem 0 0;font-size:0.75rem">Auritas × Capgemini</p>
+    <p style="color:#D8E6F3;margin:0.3rem 0 0;font-size:0.75rem">Capgemini</p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -536,7 +536,7 @@ with tabs[3]:
 
     # System prompt with full SAP context
     SYSTEM_PROMPT = f"""You are an expert SAP Data Volume Management and ILM consultant with 15+ years of experience.
-You work for Capgemini and Auritas on a joint ECC data archival engagement.
+You work for Capgemini on an ECC data archival and ILM engagement.
 
 CURRENT CLIENT CONTEXT:
 - SAP System: {sap_system}
@@ -845,7 +845,7 @@ Existing ADK files in OpenText
     <div style="background:#1A2B5E;border-radius:8px;padding:1rem;color:white;text-align:center">
     <p style="margin:0;font-size:0.8rem">
     🔒 <strong>Confidential — Internal Use</strong> &nbsp;|&nbsp; 
-    Auritas × Capgemini Joint Engagement &nbsp;|&nbsp; 
+    Capgemini Joint Engagement &nbsp;|&nbsp; 
     Built with Claude AI (Anthropic) &nbsp;|&nbsp;
     Not for distribution outside the engagement team
     </p>
